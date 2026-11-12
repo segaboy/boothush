@@ -77,6 +77,8 @@ The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. P
 
 ## Live Mac mouse tests
 
+For the exact local ClasSICK 0.97 fixture, automated pass criteria, and diagnostic addresses, see the [ClasSICK 0.97 Mac mouse runbook](docs/classick-097-mouse.md).
+
 For the anchored ClasSICK candidate, run this from a terminal with `$rom` set to your local ROM and `$trace` set to a new file path.
 
 ```powershell
