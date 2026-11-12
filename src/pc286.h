@@ -13,6 +13,8 @@ enum {
     PC286_ROM_SIZE = 65536,
     PC286_RAM_SIZE = 640 * 1024,
     PC286_FLOPPY_SIZE = 80 * 2 * 15 * 512,
+    PC286_HARD_DISK_SIZE = 615 * 4 * 17 * 512,
+    PC286_EGA_ROM_MAX = 32768,
     PC286_VIDEO_END = 0xc0000,
     PC286_FRAME_WIDTH = 640,
     PC286_FRAME_HEIGHT = 350,
@@ -36,6 +38,13 @@ typedef struct {
 /* These constructors copy the supplied image. NULL indicates invalid size or allocation failure. */
 pc286 *pc286_create(const uint8_t *rom, size_t size);
 pc286 *pc286_create_floppy(const uint8_t *image, size_t size);
+pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
+                           const uint8_t *floppy, size_t floppy_size,
+                           const uint8_t *disk, size_t disk_size);
+bool pc286_load_ega_rom(pc286 *machine, const uint8_t *rom, size_t size);
+const uint8_t *pc286_hard_disk(const pc286 *machine);
+bool pc286_inject_scancode(pc286 *machine, uint8_t scancode);
+void pc286_expect_input(pc286 *machine, bool pending);
 void pc286_destroy(pc286 *machine);
 
 void pc286_run(pc286 *machine, uint32_t cycles);

@@ -20,6 +20,8 @@ instruction and protection machinery and the common instruction routines it
 uses. It removes the 8086/8088 device implementations and wait-state machinery,
 adds bounded scheduling for halt and otherwise untimed operations, and routes
 software interrupts through BootHush's minimal firmware when explicitly
-booting a floppy image. The core's timing is approximate. The separate
+booting disk media with the built-in ROM. BootHush supplies interrupt
+acknowledgment, wakes a halted CPU on an eligible IRQ, and allows devices to
+handle word I/O transfers. The core's timing is approximate. The separate
 BootHush PC board code supplies memory, video and firmware; no IBM ROM is
 included.

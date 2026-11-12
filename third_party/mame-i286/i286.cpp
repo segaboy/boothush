@@ -200,6 +200,14 @@ uint32_t i80286_cpu_device::run(uint32_t cycles)
 	return static_cast<uint32_t>(static_cast<int>(cycles) - m_icount);
 }
 
+void i80286_cpu_device::set_irq(bool asserted)
+{
+	if (asserted)
+		m_pending_irq |= INT_IRQ;
+	else
+		m_pending_irq &= ~INT_IRQ;
+}
+
 void i80286_cpu_device::reset()
 {
 	reset_common();
@@ -699,7 +707,7 @@ void i80286_cpu_device::interrupt_descriptor(int number, int hwint, int error)
 
 	if(number == -1)
 	{
-		number = 7;
+		number = m_bus.acknowledge_interrupt();
 
 		hwint = 1;
 	}
@@ -716,6 +724,8 @@ void i80286_cpu_device::interrupt_descriptor(int number, int hwint, int error)
 				m_regs.w[CX] = registers.cx;
 				m_regs.w[DX] = registers.dx;
 				ExpandFlags(registers.flags);
+				if (registers.repeat)
+					m_ip = m_prev_ip;
 				return;
 			}
 		}
@@ -834,8 +844,7 @@ uint16_t i80286_cpu_device::read_port_word(uint16_t port)
 {
 	if(PM && (CPL > m_IOPL))
 		throw TRAP(FAULT_GP, 0);
-	const uint8_t low = m_bus.read_port(port);
-	return uint16_t(low) | (uint16_t(m_bus.read_port(uint16_t(port + 1))) << 8);
+	return m_bus.read_io_word(port);
 }
 
 void i80286_cpu_device::write_port_byte(uint16_t port, uint8_t data)
@@ -849,8 +858,7 @@ void i80286_cpu_device::write_port_word(uint16_t port, uint16_t data)
 {
 	if(PM && (CPL > m_IOPL))
 		throw TRAP(FAULT_GP, 0);
-	m_bus.write_port(port, uint8_t(data));
-	m_bus.write_port(uint16_t(port + 1), uint8_t(data >> 8));
+	m_bus.write_io_word(port, data);
 }
 
 uint8_t i80286_cpu_device::fetch()
@@ -875,7 +883,8 @@ uint32_t i80286_cpu_device::calc_addr(int seg, uint16_t offset, int size, int op
 
 void i80286_cpu_device::execute_run()
 {
-	while (m_icount > 0 && !m_halt && !m_shutdown)
+	while (m_icount > 0 && !m_shutdown &&
+	       (!m_halt || ((m_pending_irq & INT_IRQ) && interruptible())))
 	{
 		const int cycles_before = m_icount;
 		try
@@ -905,6 +914,8 @@ void i80286_cpu_device::execute_run()
 					{
 						interrupt_descriptor(-1, 1, -1);
 						m_halt = false;
+						CLK(EXCEPTION);
+						continue;
 					}
 				}
 
@@ -1632,6 +1643,7 @@ reg.base = BASE(desc); (void)(r); reg.limit = LIMIT(desc); }
 					if(PM && (CPL > m_IOPL))
 						throw TRAP(FAULT_GP, 0);
 					m_IF = 1;
+					m_no_interrupt = 1;
 					CLK(FLAG_OPS);
 					break;
 

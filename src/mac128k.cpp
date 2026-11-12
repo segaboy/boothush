@@ -1,5 +1,8 @@
 #include "mac128k.h"
 
+#include "iwm.h"
+#include "mac_keyboard.h"
+#include "mac_rtc.h"
 #include "Moira.h"
 
 #include <array>
@@ -14,15 +17,22 @@ constexpr uint32_t rom_base = 0x400000;
 constexpr uint32_t overlay_ram_base = 0x600000;
 constexpr uint32_t main_frame_base = 0x1a700;
 constexpr uint32_t alternate_frame_base = 0x12700;
+constexpr uint32_t iwm_base = 0xc00000;
+constexpr uint32_t iwm_size = 0x200000;
 constexpr uint32_t via_base = 0xefe1fe;
 constexpr uint32_t via_register_stride = 0x200;
 constexpr uint32_t via_register_count = 16;
 constexpr uint8_t overlay_select = 0x10;
+constexpr uint8_t floppy_select = 0x20;
 constexpr uint8_t main_frame_select = 0x40;
 constexpr uint8_t mouse_button = 0x08;
 constexpr uint8_t mouse_x_phase = 0x10;
 constexpr uint8_t mouse_y_phase = 0x20;
+constexpr uint8_t rtc_data = 0x01;
+constexpr uint8_t via_ca2_flag = 0x01;
 constexpr uint8_t via_ca1_flag = 0x02;
+constexpr uint8_t via_shift_flag = 0x04;
+constexpr uint8_t via_shift_mode = 0x1c;
 constexpr uint8_t via_t1_flag = 0x40;
 constexpr uint8_t via_t1_continuous = 0x40;
 constexpr uint8_t via_irq_bit = 0x80;
@@ -120,6 +130,7 @@ struct mac128k {
     uint8_t direction_a = 0;
     uint8_t direction_b = 0;
     uint8_t auxiliary_control = 0;
+    uint8_t peripheral_control = 0;
     uint8_t interrupt_flags = 0;
     uint8_t interrupt_enable = 0;
     uint16_t timer1_latch = 0;
@@ -133,11 +144,19 @@ struct mac128k {
     uint64_t next_vbl_cycle = cycles_per_vbl;
     uint32_t fault_address = 0;
     const char *fault_operation = nullptr;
+    boothush::Iwm iwm{};
+    MacKeyboard keyboard{};
+    MacRtc rtc{};
     Cpu cpu{*this};
 
     bool overlay() const
     {
         return (port_pins(port_a, direction_a) & overlay_select) != 0;
+    }
+
+    bool floppy_select_high() const
+    {
+        return (port_pins(port_a, direction_a) & floppy_select) != 0;
     }
 
     void update_irq()
@@ -151,6 +170,18 @@ struct mac128k {
     {
         return (scc[scc_channel_a].irq_pending() ? scc_ext_pending_a : 0) |
                (scc[scc_channel_b].irq_pending() ? scc_ext_pending_b : 0);
+    }
+
+    unsigned ca2_mode() const
+    {
+        return (peripheral_control >> 1) & 7;
+    }
+
+    void acknowledge_port_a()
+    {
+        const unsigned mode = ca2_mode();
+        const uint8_t handshake_ca2 = mode == 0 || mode == 2 ? via_ca2_flag : 0;
+        clear_interrupts(via_ca1_flag | handshake_ca2);
     }
 
     void tick(uint64_t cycle)
@@ -170,6 +201,14 @@ struct mac128k {
                 timer1_deadline = 0;
             }
             interrupt_flags |= via_t1_flag;
+            update_irq();
+        }
+        if (keyboard.advance(cycle)) {
+            interrupt_flags |= via_shift_flag;
+            update_irq();
+        }
+        if (rtc.advance(cycle) && ca2_mode() < 4) {
+            interrupt_flags |= via_ca2_flag;
             update_irq();
         }
     }
@@ -229,10 +268,13 @@ struct mac128k {
             inputs |= mouse_pressed ? 0 : mouse_button;
             inputs |= (scc[scc_channel_a].phase & 2) != 0 ? mouse_x_phase : 0;
             inputs |= (scc[scc_channel_b].phase & 2) != 0 ? mouse_y_phase : 0;
+            if (!rtc.data_high()) {
+                inputs &= static_cast<uint8_t>(~rtc_data);
+            }
             return port_pins(port_b, direction_b, inputs);
         }
         case 1:
-            clear_interrupts(via_ca1_flag);
+            acknowledge_port_a();
             return port_pins(port_a, direction_a);
         case 2:
             return direction_b;
@@ -247,10 +289,13 @@ struct mac128k {
             return static_cast<uint8_t>(timer1_latch);
         case 7:
             return static_cast<uint8_t>(timer1_latch >> 8);
+        case 10:
+            clear_interrupts(via_shift_flag);
+            return keyboard.shift_register();
         case 11:
             return auxiliary_control;
         case 12:
-            return 0;
+            return peripheral_control;
         case 13:
             return interrupt_flags | ((interrupt_flags & interrupt_enable) != 0 ? via_irq_bit : 0);
         case 14:
@@ -267,13 +312,15 @@ struct mac128k {
         switch (reg) {
         case 0:
             port_b = value;
+            rtc.set_port_b(port_b, direction_b);
             return;
         case 1:
-            clear_interrupts(via_ca1_flag);
+            acknowledge_port_a();
             port_a = value;
             return;
         case 2:
             direction_b = value;
+            rtc.set_port_b(port_b, direction_b);
             return;
         case 3:
             direction_a = value;
@@ -290,16 +337,22 @@ struct mac128k {
             }
             clear_interrupts(via_t1_flag);
             return;
-        case 11:
-            if ((value & ~via_t1_continuous) != 0) {
+        case 10:
+            clear_interrupts(via_shift_flag);
+            keyboard.write_shift_register(value, cpu.getClock());
+            return;
+        case 11: {
+            const uint8_t mode = value & via_shift_mode;
+            if ((value & ~(via_t1_continuous | via_shift_mode)) != 0 ||
+                (mode != 0 && mode != 0x0c && mode != 0x1c)) {
                 fault(address, "write8");
             }
             auxiliary_control = value;
+            keyboard.set_auxiliary_control(value, cpu.getClock());
             return;
+        }
         case 12:
-            if (value != 0) {
-                fault(address, "write8");
-            }
+            peripheral_control = value;
             return;
         case 13:
             clear_interrupts(value);
@@ -395,6 +448,10 @@ struct mac128k {
 
     uint32_t read_bus(uint32_t address, size_t size, const char *operation)
     {
+        if ((size == 1 || size == 2) && contains(iwm_base, iwm_size, address, size)) {
+            const uint8_t value = iwm.read((address >> 9) & 15, floppy_select_high(), cpu.getClock());
+            return size == 1 ? value : (uint32_t{value} << 8) | value;
+        }
         if (size == 1 && (address == scc_read_a || address == scc_read_b)) {
             return read_scc(address);
         }
@@ -415,6 +472,10 @@ struct mac128k {
 
     void write_bus(uint32_t address, size_t size, uint32_t value, const char *operation)
     {
+        if ((size == 1 || size == 2) && contains(iwm_base, iwm_size, address, size)) {
+            iwm.write((address >> 9) & 15, floppy_select_high(), cpu.getClock(), static_cast<uint8_t>(value));
+            return;
+        }
         if (size == 1 && (address == scc_write_a || address == scc_write_b)) {
             write_scc(address, static_cast<uint8_t>(value));
             update_irq();
@@ -499,6 +560,18 @@ void mac128k_destroy(mac128k *machine)
     delete machine;
 }
 
+bool mac128k_insert_floppy(mac128k *machine, const uint8_t *image, size_t size)
+{
+    if (image == nullptr) {
+        return false;
+    }
+    try {
+        return machine->iwm.insert(std::span(image, size));
+    } catch (const std::bad_alloc &) {
+        return false;
+    }
+}
+
 void mac128k_run(mac128k *machine, uint32_t cycles)
 {
     if (machine->fault_operation) {
@@ -533,6 +606,12 @@ void mac128k_set_mouse_phase(mac128k *machine, uint8_t x_phase, uint8_t y_phase)
     machine->scc[scc_channel_a].set_phase(x_phase);
     machine->scc[scc_channel_b].set_phase(y_phase);
     machine->update_irq();
+}
+
+bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed)
+{
+    static_assert(MAC128K_MAX_KEY_CODE == MacKeyboard::max_scan_code);
+    return machine->keyboard.queue_key(code, pressed, machine->cpu.getClock());
 }
 
 bool mac128k_read_ram(const mac128k *machine, uint32_t address, uint8_t *data, size_t size)

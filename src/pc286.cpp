@@ -1,5 +1,9 @@
 #include "pc286.h"
 #include "ega.h"
+#include "pc_at_devices.h"
+#include "pcat_floppy.h"
+#include "pcat_hard_disk.h"
+#include "pcat_keyboard.h"
 #include "../third_party/mame-i286/i286.h"
 
 #include <algorithm>
@@ -14,16 +18,29 @@ namespace {
 
 constexpr uint32_t rom_base = 0xf0000;
 constexpr uint32_t reset_rom_base = 0xff0000;
+constexpr uint32_t ega_rom_base = 0xc0000;
 constexpr uint32_t text_base = 0xb8000;
 constexpr uint16_t firmware_entries = 0x0200;
+constexpr uint16_t timer_entry = 0x0300;
+constexpr uint16_t timer_hook_entry = 0x0310;
 constexpr uint16_t carry = 1;
+constexpr uint16_t zero = 0x40;
 constexpr unsigned sector_size = 512;
 constexpr unsigned sectors_per_track = 15;
 constexpr unsigned cylinders = 80;
 constexpr unsigned heads = 2;
+constexpr uint64_t pit_rate = 1193182;
+constexpr uint64_t bios_tick_period = UINT64_C(6000000) * 65536;
+constexpr uint32_t bios_ticks_per_day = 0x1800b0;
 
 constexpr uint8_t reset_jump[] = {0xea, 0x00, 0x00, 0x00, 0xf0};
-constexpr uint8_t floppy_bootstrap[] = {
+constexpr uint8_t timer_handler[] = {
+    0x50, 0xcd, 0x1c,        // push ax; int 1ch
+    0xb0, 0x20, 0xe6, 0x20,  // mov al,20h; out 20h,al (EOI)
+    0x58, 0xcf,              // pop ax; iret
+};
+constexpr size_t boot_drive_offset = 23;
+constexpr uint8_t bootstrap[] = {
     0xfa,                    // cli
     0x31, 0xc0,              // xor ax, ax
     0x8e, 0xd8,              // mov ds, ax
@@ -34,7 +51,7 @@ constexpr uint8_t floppy_bootstrap[] = {
     0xbb, 0x00, 0x7c,        // mov bx, 7c00h
     0xb8, 0x01, 0x02,        // mov ax, 0201h
     0xb9, 0x01, 0x00,        // mov cx, 0001h
-    0x31, 0xd2,              // xor dx, dx
+    0xba, 0x00, 0x00,        // mov dx, boot drive (00h or 80h)
     0xcd, 0x13,              // int 13h
     0x72, 0x0d,              // jc halt
     0x81, 0x3e, 0xfe, 0x7d, 0x55, 0xaa, // cmp word [7dfeh], aa55h
@@ -54,9 +71,45 @@ void write_word(uint8_t *bytes, uint16_t value)
     bytes[1] = uint8_t(value >> 8);
 }
 
+uint32_t read_dword(const uint8_t *bytes)
+{
+    return uint32_t(read_word(bytes)) | (uint32_t(read_word(bytes + 2)) << 16);
+}
+
+void write_dword(uint8_t *bytes, uint32_t value)
+{
+    write_word(bytes, uint16_t(value));
+    write_word(bytes + 2, uint16_t(value >> 16));
+}
+
 void set_carry(FirmwareRegisters &regs, bool set)
 {
     regs.flags = uint16_t((regs.flags & ~carry) | (set ? carry : 0));
+}
+
+uint8_t keyboard_ascii(uint8_t scan, uint8_t flags, bool extended)
+{
+    constexpr char normal[] =
+        "\0\x1b" "1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;'\x60\0\\zxcvbnm,./\0*\0 ";
+    constexpr char shifted[] =
+        "\0\x1b" "!@#$%^&*()_+\b\tQWERTYUIOP{}\r\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
+    static_assert(sizeof(normal) == 59 && sizeof(shifted) == 59);
+    if (flags & 8) {
+        return 0;
+    }
+    if (extended) {
+        return scan == 0x1c ? '\r' : scan == 0x35 ? '/' : 0;
+    }
+    if (scan >= sizeof(normal) - 1) {
+        return 0;
+    }
+    const uint8_t base = normal[scan];
+    const bool letter = base >= 'a' && base <= 'z';
+    if (letter && (flags & 4)) {
+        return uint8_t(base - 'a' + 1);
+    }
+    const bool use_shift = ((flags & 3) != 0) != (letter && (flags & 0x40));
+    return use_shift ? shifted[scan] : base;
 }
 
 } // namespace
@@ -64,70 +117,71 @@ void set_carry(FirmwareRegisters &regs, bool set)
 struct pc286 final : boothush_i286::Bus {
     std::array<uint8_t, PC286_RAM_SIZE> ram{};
     std::array<uint8_t, PC286_ROM_SIZE> rom{};
+    std::array<uint8_t, PC286_EGA_ROM_MAX> ega_rom{};
+    size_t ega_rom_size = 0;
     std::unique_ptr<uint8_t[]> floppy;
+    std::unique_ptr<uint8_t[]> hard_disk;
     Ega ega;
+    PcAtDevices devices;
+    PcatFloppy fdc{ram};
+    PcatHardDisk hdc;
+    PcatKeyboard keyboard;
     boothush_i286::i80286_cpu_device cpu{*this};
     uint64_t cycles = 0;
     const char *fault = nullptr;
     bool post_written = false;
     uint8_t post = 0;
+    bool built_in_firmware = false;
+    bool future_input = false;
+    bool extended_scan = false;
+    unsigned pause_bytes = 0;
+    uint64_t bios_ticks_elapsed = 0;
+    uint64_t next_bios_tick = (bios_tick_period + pit_rate - 1) / pit_rate;
 
-    std::array<uint8_t, 128> cmos{};
-    uint8_t cmos_index = 0;
-    uint8_t kbc_command_byte = 0;
-    uint8_t kbc_output_port = 3;
-    uint8_t kbc_reply = 0;
-    bool kbc_reply_ready = false;
-    bool kbc_self_tested = false;
-    uint8_t kbc_next_write = 0;
-    uint8_t floppy_status = 0;
-
-    pc286()
+    void set_firmware_vector(uint8_t number, uint16_t offset)
     {
-        // Fixed RTC values make boot diagnostics repeatable.
-        cmos[0x06] = 1;
-        cmos[0x07] = 1;
-        cmos[0x08] = 1;
-        cmos[0x09] = 0x84;
-        cmos[0x0a] = 0x26;
-        cmos[0x0b] = 2;
-        cmos[0x0d] = 0x80;
-        write_word(cmos.data() + 0x15, PC286_RAM_SIZE / 1024);
-        cmos[0x32] = 0x19;
-        update_cmos_checksum();
+        uint8_t *const vector = ram.data() + 4 * number;
+        write_word(vector, offset);
+        write_word(vector + 2, uint16_t(rom_base >> 4));
     }
 
-    void update_cmos_checksum()
+    void initialize_firmware()
     {
-        uint16_t sum = 0;
-        for (unsigned reg = 0x10; reg <= 0x2d; ++reg) {
-            sum = uint16_t(sum + cmos[reg]);
-        }
-        cmos[0x2e] = uint8_t(sum >> 8);
-        cmos[0x2f] = uint8_t(sum);
-    }
-
-    void initialize_floppy_firmware()
-    {
+        built_in_firmware = true;
         rom.fill(0xff);
         std::copy_n(reset_jump, sizeof(reset_jump), rom.data() + PC286_ROM_SIZE - 16);
-        std::copy_n(floppy_bootstrap, sizeof(floppy_bootstrap), rom.data());
-        for (const uint8_t number : {0x10, 0x11, 0x12, 0x13}) {
-            uint8_t *const vector = ram.data() + 4 * number;
-            write_word(vector, uint16_t(firmware_entries + number));
-            write_word(vector + 2, uint16_t(rom_base >> 4));
+        std::copy_n(bootstrap, sizeof(bootstrap), rom.data());
+        for (const uint8_t number : {0x10, 0x11, 0x12, 0x13, 0x15, 0x16, 0x1a}) {
+            set_firmware_vector(number, uint16_t(firmware_entries + number));
             rom[firmware_entries + number] = 0xcf; // IRET fallback.
         }
+        set_firmware_vector(0x08, timer_entry);
+        set_firmware_vector(0x1c, timer_hook_entry);
+        std::copy_n(timer_handler, sizeof(timer_handler), rom.data() + timer_entry);
+        rom[timer_hook_entry] = 0xcf;
+        devices.write_port(0x20, 0x11);
+        devices.write_port(0x21, 0x08);
+        devices.write_port(0x21, 0x04);
+        devices.write_port(0x21, 0x01);
+        devices.write_port(0x21, 0xfe); // BIOS IRQ0 timer enabled.
+        devices.write_port(0x43, 0x36);
+        devices.write_port(0x40, 0);
+        devices.write_port(0x40, 0); // PIT0 divisor 65,536 (18.2 Hz).
 
-        cmos[0x10] = 0x20; // One 1.2 MB diskette drive at A:.
-        cmos[0x14] = 1;
-        update_cmos_checksum();
-        write_word(ram.data() + 0x410, 1);
+        write_word(ram.data() + 0x410, floppy ? 1 : 0);
         write_word(ram.data() + 0x413, PC286_RAM_SIZE / 1024);
+        ram[0x475] = hard_disk ? 1 : 0;
+        keyboard.write_port(0x64, 0x60);
+        keyboard.write_port(0x60, 0x40); // BIOS keyboard services receive translated set 1.
         set_video_mode(3);
 
-        if (read_word(floppy.get() + sector_size - 2) != 0xaa55) {
+        const bool boot_floppy = floppy && read_word(floppy.get() + sector_size - 2) == 0xaa55;
+        const bool boot_hard_disk = hard_disk &&
+            read_word(hard_disk.get() + sector_size - 2) == 0xaa55;
+        if (!boot_floppy && !boot_hard_disk) {
             fault = "missing_boot_signature";
+        } else if (!boot_floppy) {
+            rom[boot_drive_offset] = 0x80;
         }
     }
 
@@ -139,8 +193,13 @@ struct pc286 final : boothush_i286::Bus {
         if (address >= rom_base && address < rom_base + PC286_ROM_SIZE) {
             return rom[address - rom_base];
         }
-        if (address >= reset_rom_base && address < reset_rom_base + PC286_ROM_SIZE) {
-            return rom[address - reset_rom_base];
+        if (address >= ega_rom_base && address < ega_rom_base + ega_rom_size) {
+            return ega_rom[address - ega_rom_base];
+        }
+        // When A20 is low, the same high BIOS selection survives a warm reset.
+        const uint32_t reset_base = keyboard.a20_enabled() ? reset_rom_base : 0xef0000;
+        if (address >= reset_base && address < reset_base + PC286_ROM_SIZE) {
+            return rom[address - reset_base];
         }
         return ega.handles_memory(address) ? ega.read_memory(address) : 0xff;
     }
@@ -156,113 +215,129 @@ struct pc286 final : boothush_i286::Bus {
 
     uint8_t read_port(uint16_t port) override
     {
-        switch (port) {
-        case 0x60:
-            if (kbc_reply_ready) {
-                kbc_reply_ready = false;
-                return kbc_reply;
-            }
-            return 0xff;
-        case 0x64:
-            return uint8_t((kbc_self_tested ? 4 : 0) | (kbc_reply_ready ? 1 : 0));
-        case 0x71:
-            return cmos[cmos_index];
-        default:
-            if (port == 0x3ba || port == 0x3da) {
-                ega.set_cycles(cycles);
-            }
-            return ega.handles_port(port) ? ega.read_port(port) : 0xff;
+        if (port == 0x60 || port == 0x64) {
+            return keyboard.read_port(port);
         }
-    }
-
-    void set_keyboard_reply(uint8_t reply)
-    {
-        kbc_reply = reply;
-        kbc_reply_ready = true;
-    }
-
-    void keyboard_command(uint8_t command)
-    {
-        switch (command) {
-        case 0x20:
-            set_keyboard_reply(kbc_command_byte);
-            break;
-        case 0x60:
-        case 0xd1:
-            kbc_next_write = command;
-            break;
-        case 0xaa:
-            kbc_self_tested = true;
-            set_keyboard_reply(0x55);
-            break;
-        case 0xab:
-            set_keyboard_reply(0);
-            break;
-        case 0xad:
-            kbc_command_byte |= 0x10;
-            break;
-        case 0xae:
-            kbc_command_byte &= ~0x10;
-            break;
-        case 0xd0:
-            set_keyboard_reply(kbc_output_port);
-            break;
+        if (devices.handles_port(port)) {
+            return devices.read_port(port);
         }
+        if (fdc.handles_port(port)) {
+            return fdc.read_port(port);
+        }
+        if (hdc.handles_port(port)) {
+            return hdc.read_port(port);
+        }
+        if (port == 0x3ba || port == 0x3da) {
+            ega.set_cycles(cycles);
+        }
+        return ega.handles_port(port) ? ega.read_port(port) : 0xff;
     }
 
     void write_port(uint16_t port, uint8_t value) override
     {
-        switch (port) {
-        case 0x60:
-            if (kbc_next_write == 0x60) {
-                kbc_command_byte = value;
-            } else if (kbc_next_write == 0xd1) {
-                kbc_output_port = value;
-                cpu.set_a20((value & 2) != 0);
-            }
-            kbc_next_write = 0;
-            break;
-        case 0x64:
-            keyboard_command(value);
-            break;
-        case 0x70:
-            cmos_index = value & 0x7f;
-            break;
-        case 0x71:
-            if (cmos_index != 0x0c && cmos_index != 0x0d) {
-                cmos[cmos_index] = value;
-            }
-            break;
-        case 0x80:
+        if (port == 0x80) {
             post_written = true;
             post = value;
-            break;
-        default:
-            if (ega.handles_port(port)) {
-                ega.write_port(port, value);
-            }
-            break;
+        } else if (port == 0x60 || port == 0x64) {
+            keyboard.write_port(port, value);
+        } else if (devices.handles_port(port)) {
+            devices.write_port(port, value);
+        } else if (fdc.handles_port(port)) {
+            fdc.write_port(port, value);
+        } else if (hdc.handles_port(port)) {
+            hdc.write_port(port, value);
+        } else if (ega.handles_port(port)) {
+            ega.write_port(port, value);
         }
     }
 
-    void disk_status(FirmwareRegisters &regs, uint8_t status, uint8_t count)
+    uint16_t read_io_word(uint16_t port) override
     {
-        floppy_status = status;
-        ram[0x441] = status;
+        return port == 0x1f0 ? hdc.read_data_word() : Bus::read_io_word(port);
+    }
+
+    void write_io_word(uint16_t port, uint16_t value) override
+    {
+        if (port == 0x1f0) {
+            hdc.write_data_word(value);
+        } else {
+            Bus::write_io_word(port, value);
+        }
+    }
+
+    uint8_t acknowledge_interrupt() override
+    {
+        return devices.acknowledge_interrupt();
+    }
+
+    void update_interrupts()
+    {
+        if (keyboard.take_irq1()) {
+            devices.pulse_irq(1);
+        }
+        if (fdc.take_irq()) {
+            devices.pulse_irq(6);
+        }
+        if (hdc.take_irq()) {
+            devices.pulse_irq(14);
+        }
+        cpu.set_irq(devices.interrupt_pending());
+    }
+
+    bool terminal_halt() const
+    {
+        return cpu.halted() && (!cpu.interruptible() ||
+            (!devices.interrupt_pending() && !devices.timed_interrupt_possible() && !future_input));
+    }
+
+    void advance(uint32_t elapsed)
+    {
+        cycles += elapsed;
+        devices.advance_cycles(elapsed);
+        if (built_in_firmware && cycles >= next_bios_tick) {
+            const uint64_t ticks = cycles * pit_rate / bios_tick_period;
+            const uint64_t updated = read_dword(ram.data() + 0x46c) + ticks - bios_ticks_elapsed;
+            write_dword(ram.data() + 0x46c, uint32_t(updated % bios_ticks_per_day));
+            ram[0x470] = uint8_t(ram[0x470] + updated / bios_ticks_per_day);
+            bios_ticks_elapsed = ticks;
+            next_bios_tick = ((ticks + 1) * bios_tick_period + pit_rate - 1) / pit_rate;
+        }
+        if (keyboard.take_reset_request()) {
+            cpu.reset();
+        }
+        cpu.set_a20(keyboard.a20_enabled());
+        update_interrupts();
+    }
+
+    void disk_status(FirmwareRegisters &regs, bool hard, uint8_t status, uint8_t count = 0)
+    {
+        ram[hard ? 0x474 : 0x441] = status;
         regs.ax = uint16_t((uint16_t(status) << 8) | count);
         set_carry(regs, status != 0);
     }
 
-    void read_disk(FirmwareRegisters &regs)
+    void disk_transfer(FirmwareRegisters &regs, bool hard, unsigned operation)
     {
         const unsigned count = regs.ax & 0xff;
         const unsigned cylinder = (regs.cx >> 8) | ((regs.cx & 0xc0) << 2);
         const unsigned sector = regs.cx & 0x3f;
         const unsigned head = regs.dx >> 8;
-        if (count == 0 || sector == 0 || sector > sectors_per_track ||
-            count > sectors_per_track - sector + 1 ||
-            cylinder >= cylinders || head >= heads) {
-            disk_status(regs, 4, 0);
+        const unsigned drive_sectors = hard ? PcatHardDisk::sectors_per_track : sectors_per_track;
+        const unsigned drive_cylinders = hard ? PcatHardDisk::cylinders : cylinders;
+        const unsigned drive_heads = hard ? PcatHardDisk::heads : heads;
+        if (count == 0 || count > 127 || sector == 0 || sector > drive_sectors ||
+            (!hard && count > drive_sectors - sector + 1) ||
+            cylinder >= drive_cylinders || head >= drive_heads) {
+            disk_status(regs, hard, 4);
+            return;
+        }
+        const unsigned lba = (cylinder * drive_heads + head) * drive_sectors + sector - 1;
+        if (count > drive_cylinders * drive_heads * drive_sectors - lba) {
+            disk_status(regs, hard, 4);
+            return;
+        }
+        if (operation == 0x04) {
+            disk_status(regs, hard, 0, uint8_t(count));
             return;
         }
 
@@ -270,44 +345,70 @@ struct pc286 final : boothush_i286::Bus {
         const unsigned length = count * sector_size;
         if ((destination & 0xffff) + length > 0x10000 ||
             destination > ram.size() || length > ram.size() - destination) {
-            disk_status(regs, 9, 0);
+            disk_status(regs, hard, 9);
             return;
         }
 
-        const unsigned offset =
-            ((cylinder * heads + head) * sectors_per_track + sector - 1) * sector_size;
-        std::memcpy(ram.data() + destination, floppy.get() + offset, length);
-        disk_status(regs, 0, uint8_t(count));
+        uint8_t *const media = (hard ? hard_disk.get() : floppy.get()) + lba * sector_size;
+        if (operation == 0x03) {
+            std::memcpy(media, ram.data() + destination, length);
+        } else {
+            std::memcpy(ram.data() + destination, media, length);
+        }
+        disk_status(regs, hard, 0, uint8_t(count));
     }
 
     void disk_service(FirmwareRegisters &regs)
     {
-        if ((regs.dx & 0xff) != 0) {
-            disk_status(regs, 1, 0);
+        const uint8_t drive = uint8_t(regs.dx);
+        const bool hard = (drive & 0x80) != 0;
+        if ((hard && (drive != 0x80 || !hard_disk)) || (!hard && (drive != 0 || !floppy))) {
+            disk_status(regs, hard, 1);
             return;
         }
-        switch (regs.ax >> 8) {
+        const unsigned operation = regs.ax >> 8;
+        switch (operation) {
         case 0x00:
-            disk_status(regs, 0, 0);
+            disk_status(regs, hard, 0);
             break;
         case 0x01:
-            disk_status(regs, floppy_status, 0);
+            disk_status(regs, hard, ram[hard ? 0x474 : 0x441]);
             break;
         case 0x02:
-            read_disk(regs);
-            break;
         case 0x03:
-        case 0x05:
-            disk_status(regs, 3, 0); // The caller's image is write protected.
+        case 0x04:
+            if (operation == 0x03 && !hard) {
+                disk_status(regs, false, 3); // Floppy is write protected.
+            } else {
+                disk_transfer(regs, hard, operation);
+            }
             break;
-        case 0x08:
-            regs.bx = uint16_t((regs.bx & 0xff00) | 2);
-            regs.cx = uint16_t(((cylinders - 1) << 8) | sectors_per_track);
-            regs.dx = uint16_t(((heads - 1) << 8) | 1);
-            disk_status(regs, 0, 0);
+        case 0x05:
+            disk_status(regs, hard, hard ? 1 : 3);
+            break;
+        case 0x08: {
+            const unsigned last_cylinder = (hard ? PcatHardDisk::cylinders : cylinders) - 1;
+            if (!hard) {
+                regs.bx = uint16_t((regs.bx & 0xff00) | 2);
+            }
+            regs.cx = uint16_t(((last_cylinder & 0xff) << 8) |
+                               ((last_cylinder >> 2) & 0xc0) |
+                               (hard ? PcatHardDisk::sectors_per_track : sectors_per_track));
+            regs.dx = uint16_t((((hard ? PcatHardDisk::heads : heads) - 1) << 8) | 1);
+            disk_status(regs, hard, 0);
+            break;
+        }
+        case 0x15:
+            ram[hard ? 0x474 : 0x441] = 0;
+            regs.ax = hard ? 0x0300 : 0x0100;
+            if (hard) {
+                regs.cx = uint16_t(PcatHardDisk::sector_count >> 16);
+                regs.dx = uint16_t(PcatHardDisk::sector_count);
+            }
+            set_carry(regs, false);
             break;
         default:
-            disk_status(regs, 1, 0);
+            disk_status(regs, hard, 1);
             break;
         }
     }
@@ -319,7 +420,9 @@ struct pc286 final : boothush_i286::Bus {
         }
         ram[0x449] = mode & 0x7f;
         write_word(ram.data() + 0x44a, 80);
-        write_word(ram.data() + 0x450, 0);
+        write_word(ram.data() + 0x44c, ram[0x449] == 3 ? 0x1000 : 0x8000);
+        std::fill_n(ram.data() + 0x450, 16, 0);
+        write_word(ram.data() + 0x460, 0x0b0c);
         ram[0x462] = 0;
         ram[0x484] = 24;
         return true;
@@ -357,29 +460,103 @@ struct pc286 final : boothush_i286::Bus {
         }
 
         if (row == 25) {
-            for (unsigned index = 0; index < 2 * 80 * 24; ++index) {
-                ega.write_memory(text_base + index, ega.peek_memory(text_base + 2 * 80 + index));
-            }
-            for (unsigned index = 0; index < 80; ++index) {
-                const uint32_t address = text_base + 2 * (24 * 80 + index);
-                ega.write_memory(address, ' ');
-                ega.write_memory(address + 1, 7);
-            }
+            scroll_text(0, 0, 24, 79, 1, 7);
             --row;
         }
         ram[0x450] = uint8_t(column);
         ram[0x451] = uint8_t(row);
     }
 
+    void scroll_text(unsigned top, unsigned left, unsigned bottom, unsigned right,
+                     int delta, uint8_t attribute)
+    {
+        if (top > bottom || left > right || bottom >= 25 || right >= 80) {
+            return;
+        }
+        for (unsigned index = 0; index <= bottom - top; ++index) {
+            const unsigned row = delta < 0 ? bottom - index : top + index;
+            const int source_row = int(row) + delta;
+            const bool blank = source_row < int(top) || source_row > int(bottom);
+            for (unsigned column = left; column <= right; ++column) {
+                const uint32_t address = text_base + 2 * (row * 80 + column);
+                if (blank) {
+                    ega.write_memory(address, ' ');
+                    ega.write_memory(address + 1, attribute);
+                } else {
+                    const uint32_t source = text_base + 2 * (unsigned(source_row) * 80 + column);
+                    ega.write_memory(address, ega.peek_memory(source));
+                    ega.write_memory(address + 1, ega.peek_memory(source + 1));
+                }
+            }
+        }
+    }
+
     void video_service(FirmwareRegisters &regs)
     {
         bool handled = false;
-        switch (regs.ax >> 8) {
+        const unsigned operation = regs.ax >> 8;
+        const unsigned page = regs.bx >> 8;
+        const bool text = ram[0x449] == 3;
+        switch (operation) {
         case 0x00:
             handled = set_video_mode(uint8_t(regs.ax));
             break;
+        case 0x01:
+            write_word(ram.data() + 0x460, regs.cx);
+            handled = true;
+            break;
+        case 0x02:
+        case 0x03:
+            if (page < 8) {
+                uint8_t *const cursor = ram.data() + 0x450 + 2 * page;
+                if (operation == 0x02) {
+                    write_word(cursor, regs.dx);
+                } else {
+                    regs.dx = read_word(cursor);
+                    regs.cx = read_word(ram.data() + 0x460);
+                }
+                handled = true;
+            }
+            break;
+        case 0x06:
+        case 0x07:
+            if (text) {
+                int rows = uint8_t(regs.ax);
+                if (rows == 0) {
+                    rows = 25;
+                }
+                scroll_text(regs.cx >> 8, uint8_t(regs.cx), regs.dx >> 8, uint8_t(regs.dx),
+                            operation == 0x06 ? rows : -rows, uint8_t(page));
+                handled = true;
+            }
+            break;
+        case 0x08:
+        case 0x09:
+        case 0x0a:
+            if (text && page < 8) {
+                const uint8_t *const cursor = ram.data() + 0x450 + 2 * page;
+                if (cursor[0] >= 80 || cursor[1] >= 25) {
+                    break;
+                }
+                const unsigned position = cursor[1] * 80 + cursor[0];
+                const uint32_t address = text_base + page * 0x1000 + position * 2;
+                if (operation == 0x08) {
+                    regs.ax = uint16_t(ega.peek_memory(address) |
+                                       (uint16_t(ega.peek_memory(address + 1)) << 8));
+                } else {
+                    const unsigned count = std::min(unsigned(regs.cx), 25 * 80 - position);
+                    for (unsigned index = 0; index < count; ++index) {
+                        ega.write_memory(address + 2 * index, uint8_t(regs.ax));
+                        if (operation == 0x09) {
+                            ega.write_memory(address + 2 * index + 1, uint8_t(regs.bx));
+                        }
+                    }
+                }
+                handled = true;
+            }
+            break;
         case 0x0e:
-            handled = ram[0x449] == 3;
+            handled = text;
             if (handled) {
                 teletype(uint8_t(regs.ax));
             }
@@ -396,9 +573,112 @@ struct pc286 final : boothush_i286::Bus {
         set_carry(regs, !handled);
     }
 
+    bool keyboard_key(bool consume, uint16_t &key)
+    {
+        uint8_t raw;
+        while (keyboard.peek_output(raw)) {
+            if (pause_bytes != 0 || raw == 0xe0 || raw == 0xe1) {
+                keyboard.read_port(0x60);
+                if (pause_bytes != 0) {
+                    --pause_bytes;
+                } else {
+                    extended_scan = raw == 0xe0;
+                    pause_bytes = raw == 0xe1 ? 5 : 0;
+                }
+                continue;
+            }
+            const uint8_t scan = raw & 0x7f;
+            const bool released = (raw & 0x80) != 0;
+            const uint8_t modifier = scan == 0x36 && !extended_scan ? 1
+                : scan == 0x2a && !extended_scan ? 2
+                : scan == 0x1d ? 4
+                : scan == 0x38 ? 8 : 0;
+            if (modifier != 0) {
+                ram[0x417] = uint8_t((ram[0x417] & ~modifier) | (released ? 0 : modifier));
+            } else if (scan == 0x3a && !extended_scan) {
+                if (!released) {
+                    ram[0x417] ^= 0x40;
+                }
+            } else if (!released) {
+                key = uint16_t((uint16_t(scan) << 8) | keyboard_ascii(scan, ram[0x417], extended_scan));
+                if (consume) {
+                    keyboard.read_port(0x60);
+                    extended_scan = false;
+                }
+                return true;
+            }
+            keyboard.read_port(0x60);
+            extended_scan = false;
+        }
+        return false;
+    }
+
+    void keyboard_service(FirmwareRegisters &regs)
+    {
+        switch (regs.ax >> 8) {
+        case 0x00:
+        case 0x10:
+            regs.repeat = !keyboard_key(true, regs.ax);
+            break;
+        case 0x01:
+        case 0x11:
+            regs.flags = keyboard_key(false, regs.ax)
+                ? uint16_t(regs.flags & ~zero) : uint16_t(regs.flags | zero);
+            break;
+        case 0x02:
+        case 0x12: {
+            uint16_t key;
+            keyboard_key(false, key);
+            regs.ax = uint16_t((regs.ax & 0xff00) | ram[0x417]);
+            break;
+        }
+        default:
+            set_carry(regs, true);
+            break;
+        }
+    }
+
+    uint8_t rtc_bcd(uint8_t index) const
+    {
+        const uint8_t value = devices.rtc_register(index);
+        return (devices.rtc_register(0x0b) & 4) != 0
+            ? uint8_t(((value / 10) << 4) | (value % 10)) : value;
+    }
+
+    void time_service(FirmwareRegisters &regs)
+    {
+        switch (regs.ax >> 8) {
+        case 0x00: {
+            const uint32_t ticks = read_dword(ram.data() + 0x46c);
+            regs.cx = uint16_t(ticks >> 16);
+            regs.dx = uint16_t(ticks);
+            regs.ax = ram[0x470];
+            ram[0x470] = 0;
+            break;
+        }
+        case 0x01:
+            write_dword(ram.data() + 0x46c,
+                        ((uint32_t(regs.cx) << 16) | regs.dx) % bios_ticks_per_day);
+            ram[0x470] = 0;
+            break;
+        case 0x02:
+            regs.cx = uint16_t((uint16_t(rtc_bcd(4)) << 8) | rtc_bcd(2));
+            regs.dx = uint16_t((uint16_t(rtc_bcd(0)) << 8) | (devices.rtc_register(0x0b) & 1));
+            break;
+        case 0x04:
+            regs.cx = uint16_t((uint16_t(rtc_bcd(0x32)) << 8) | rtc_bcd(9));
+            regs.dx = uint16_t((uint16_t(rtc_bcd(8)) << 8) | rtc_bcd(7));
+            break;
+        default:
+            set_carry(regs, true);
+            return;
+        }
+        set_carry(regs, false);
+    }
+
     bool firmware_interrupt(uint8_t number, FirmwareRegisters &regs) override
     {
-        if (!floppy) {
+        if (!built_in_firmware) {
             return false;
         }
 
@@ -422,6 +702,21 @@ struct pc286 final : boothush_i286::Bus {
         case 0x13:
             disk_service(regs);
             return true;
+        case 0x15:
+            if ((regs.ax >> 8) == 0x88) {
+                regs.ax = 0;
+                set_carry(regs, false);
+            } else {
+                regs.ax = uint16_t(0x8600 | (regs.ax & 0xff));
+                set_carry(regs, true);
+            }
+            return true;
+        case 0x16:
+            keyboard_service(regs);
+            return true;
+        case 0x1a:
+            time_service(regs);
+            return true;
         default:
             return false;
         }
@@ -430,32 +725,89 @@ struct pc286 final : boothush_i286::Bus {
 
 pc286 *pc286_create(const uint8_t *rom, size_t size)
 {
-    if (rom == nullptr || size != PC286_ROM_SIZE) {
-        return nullptr;
-    }
-    auto machine = std::unique_ptr<pc286>(new (std::nothrow) pc286);
-    if (machine) {
-        std::memcpy(machine->rom.data(), rom, size);
-    }
-    return machine.release();
+    return pc286_create_system(rom, size, nullptr, 0, nullptr, 0);
 }
 
 pc286 *pc286_create_floppy(const uint8_t *image, size_t size)
 {
-    if (image == nullptr || size != PC286_FLOPPY_SIZE) {
+    return pc286_create_system(nullptr, 0, image, size, nullptr, 0);
+}
+
+pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
+                           const uint8_t *floppy, size_t floppy_size,
+                           const uint8_t *disk, size_t disk_size)
+{
+    static_assert(PC286_HARD_DISK_SIZE == PcatHardDisk::image_size);
+    if ((!rom && !floppy && !disk) ||
+        rom_size != (rom ? PC286_ROM_SIZE : 0u) ||
+        floppy_size != (floppy ? PC286_FLOPPY_SIZE : 0u) ||
+        disk_size != (disk ? PC286_HARD_DISK_SIZE : 0u)) {
         return nullptr;
     }
     auto machine = std::unique_ptr<pc286>(new (std::nothrow) pc286);
     if (!machine) {
         return nullptr;
     }
-    machine->floppy.reset(new (std::nothrow) uint8_t[size]);
-    if (!machine->floppy) {
-        return nullptr;
+
+    if (floppy) {
+        machine->floppy.reset(new (std::nothrow) uint8_t[floppy_size]);
+        if (!machine->floppy) {
+            return nullptr;
+        }
+        std::memcpy(machine->floppy.get(), floppy, floppy_size);
+        machine->fdc.set_media({machine->floppy.get(), floppy_size});
     }
-    std::memcpy(machine->floppy.get(), image, size);
-    machine->initialize_floppy_firmware();
+    if (disk) {
+        machine->hard_disk.reset(new (std::nothrow) uint8_t[disk_size]);
+        if (!machine->hard_disk) {
+            return nullptr;
+        }
+        std::memcpy(machine->hard_disk.get(), disk, disk_size);
+        machine->hdc.mount({machine->hard_disk.get(), disk_size});
+    }
+    machine->devices.configure_drives(floppy != nullptr, disk != nullptr);
+    if (rom) {
+        std::memcpy(machine->rom.data(), rom, rom_size);
+    } else {
+        machine->initialize_firmware();
+    }
     return machine.release();
+}
+
+bool pc286_load_ega_rom(pc286 *machine, const uint8_t *rom, size_t size)
+{
+    if (!rom || size < 512 || size > PC286_EGA_ROM_MAX || size % 512 != 0 ||
+        rom[0] != 0x55 || rom[1] != 0xaa || rom[2] == 0 || size_t(rom[2]) * 512 > size) {
+        return false;
+    }
+    const size_t declared_size = size_t(rom[2]) * 512;
+    uint8_t checksum = 0;
+    for (size_t offset = 0; offset < declared_size; ++offset) {
+        checksum = uint8_t(checksum + rom[offset]);
+    }
+    if (checksum != 0) {
+        return false;
+    }
+    std::memcpy(machine->ega_rom.data(), rom, declared_size);
+    machine->ega_rom_size = declared_size;
+    return true;
+}
+
+const uint8_t *pc286_hard_disk(const pc286 *machine)
+{
+    return machine->hard_disk.get();
+}
+
+bool pc286_inject_scancode(pc286 *machine, uint8_t scancode)
+{
+    const bool accepted = machine->keyboard.inject_scancode(scancode);
+    machine->update_interrupts();
+    return accepted;
+}
+
+void pc286_expect_input(pc286 *machine, bool pending)
+{
+    machine->future_input = pending;
 }
 
 void pc286_destroy(pc286 *machine)
@@ -467,15 +819,17 @@ void pc286_run(pc286 *machine, uint32_t cycles)
 {
     uint64_t advanced = 0;
     while (advanced < cycles && machine->fault == nullptr &&
-           !machine->cpu.halted() && !machine->cpu.shutdown()) {
+           !machine->terminal_halt() && !machine->cpu.shutdown()) {
         // Keep device time and REP scheduling independent of the host's poll slice.
-        const uint32_t consumed = machine->cpu.run(1);
+        const uint32_t consumed = machine->cpu.halted() && !machine->devices.interrupt_pending()
+            ? (machine->devices.timed_interrupt_possible() ? 1 : uint32_t(cycles - advanced))
+            : machine->cpu.run(1);
         if (consumed == 0) {
             machine->fault = "cpu_no_progress";
             break;
         }
         advanced += consumed;
-        machine->cycles += consumed;
+        machine->advance(consumed);
     }
 }
 
@@ -489,7 +843,7 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.last_exception = machine->cpu.last_exception();
     state.post = machine->post;
     state.post_written = machine->post_written;
-    state.halted = machine->cpu.halted();
+    state.halted = machine->terminal_halt();
     if (machine->fault != nullptr) {
         state.fault_operation = machine->fault;
         state.fault_address = state.pc;

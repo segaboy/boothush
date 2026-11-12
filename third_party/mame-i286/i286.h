@@ -16,6 +16,8 @@ public:
 	uint16_t cs() const { return m_sregs[CS]; }
 	uint16_t ip() const { return m_ip; }
 	bool halted() const { return m_halt; }
+	bool interruptible() const { return m_IF && !m_no_interrupt; }
+	void set_irq(bool asserted);
 	bool shutdown() const { return m_shutdown; }
 	uint32_t fault_pc() const { return m_fault_pc; }
 	int last_exception() const { return m_last_exception; }

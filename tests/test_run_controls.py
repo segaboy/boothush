@@ -40,6 +40,18 @@ class RunControlTests(BootHushTestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(frame.read_bytes(), b"keep")
 
+    def test_mac_rejects_malformed_floppy(self):
+        floppy = self.scratch / "bad.dsk"
+        floppy.write_bytes(bytes(409601))
+        result = self.boot("--floppy", floppy, exit_code=2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Macintosh floppy", result["error"])
+
+    def test_input_event_order_applies_across_device_types(self):
+        result = self.boot("--key", "100:0:1", "--mouse-button", "99:1", exit_code=2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("order", result["error"])
+
     def test_mouse_button_press_and_release_reach_via(self):
         self.rom.write_bytes(make_rom(bytes.fromhex(
             "13fc 0000 00ef fffe "  # Clear VIA port A latch.

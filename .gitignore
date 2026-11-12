@@ -6,6 +6,8 @@ __pycache__/
 *.rom
 *.img
 *.ima
+*.dsk
+*.dc42
 *.iso
 *.vhd
 *.vdi

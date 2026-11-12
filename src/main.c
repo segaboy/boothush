@@ -13,7 +13,7 @@
 
 enum {
     MAX_INSPECT_BYTES = 4096,
-    MAX_MOUSE_EVENTS = 1024,
+    MAX_INPUT_EVENTS = 1024,
     MAX_CYCLES = 1000000000,
     MAX_TIMEOUT_MS = 60000,
     CYCLE_SLICE = 256,
@@ -30,11 +30,13 @@ struct inspection {
     uint32_t length;
 };
 
-struct mouse_event {
+enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MAC_KEY, INPUT_PC_SCAN };
+
+struct input_event {
     uint32_t cycle;
-    bool phase;
-    uint8_t x;
-    uint8_t y;
+    enum input_kind kind;
+    uint8_t first;
+    uint8_t second;
 };
 
 enum machine_kind { MACHINE_UNSET, MACHINE_MAC128K, MACHINE_PC286 };
@@ -43,6 +45,9 @@ struct request {
     enum machine_kind machine;
     const wchar_t *rom_path;
     const wchar_t *floppy_path;
+    const wchar_t *disk_path;
+    const wchar_t *disk_out_path;
+    const wchar_t *ega_rom_path;
     const wchar_t *frame_path;
     const wchar_t *cancel_event;
     uint32_t cycle_limit;
@@ -53,8 +58,13 @@ struct request {
     uint32_t target_pc;
     bool stop_at_post;
     uint32_t target_post;
-    struct mouse_event mouse_events[MAX_MOUSE_EVENTS];
-    size_t mouse_event_count;
+    struct input_event input_events[MAX_INPUT_EVENTS];
+    size_t input_event_count;
+};
+
+struct image {
+    uint8_t *bytes;
+    DWORD size;
 };
 
 struct machine {
@@ -139,6 +149,43 @@ static bool parse_fields(const wchar_t *text, uint32_t *fields, size_t count)
     return *text == '\0';
 }
 
+static bool add_input_event(struct request *request, enum input_kind kind, const wchar_t *value)
+{
+    const size_t count = request->input_event_count;
+    const bool two_arguments = kind == INPUT_PHASE || kind == INPUT_MAC_KEY;
+    uint32_t fields[3] = {0};
+    if (count == MAX_INPUT_EVENTS || !parse_fields(value, fields, two_arguments ? 3 : 2) ||
+        (count != 0 && fields[0] < request->input_events[count - 1].cycle)) {
+        return false;
+    }
+    switch (kind) {
+    case INPUT_BUTTON:
+        if (fields[1] > 1) {
+            return false;
+        }
+        break;
+    case INPUT_PHASE:
+        if (fields[1] > 3 || fields[2] > 3) {
+            return false;
+        }
+        break;
+    case INPUT_MAC_KEY:
+        if (fields[1] > MAC128K_MAX_KEY_CODE || fields[2] > 1) {
+            return false;
+        }
+        break;
+    case INPUT_PC_SCAN:
+        if (fields[1] > 0xff) {
+            return false;
+        }
+        break;
+    }
+    request->input_events[count] = (struct input_event){
+        fields[0], kind, (uint8_t)fields[1], (uint8_t)fields[2]};
+    ++request->input_event_count;
+    return true;
+}
+
 static const char *parse_request(int argc, wchar_t **argv, struct request *request)
 {
     if (argc % 2 == 0) {
@@ -165,22 +212,32 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->rom_path = value;
         } else if (wcscmp(option, L"--floppy") == 0 && request->floppy_path == NULL) {
             request->floppy_path = value;
+        } else if (wcscmp(option, L"--hard-disk") == 0 && request->disk_path == NULL) {
+            request->disk_path = value;
+        } else if (wcscmp(option, L"--disk-out") == 0 && request->disk_out_path == NULL) {
+            request->disk_out_path = value;
+        } else if (wcscmp(option, L"--ega-rom") == 0 && request->ega_rom_path == NULL) {
+            request->ega_rom_path = value;
         } else if (wcscmp(option, L"--frame") == 0 && request->frame_path == NULL) {
             request->frame_path = value;
         } else if (wcscmp(option, L"--cancel-event") == 0 && request->cancel_event == NULL) {
             request->cancel_event = value;
-        } else if (wcscmp(option, L"--mouse-button") == 0 || wcscmp(option, L"--mouse-phase") == 0) {
-            const size_t count = request->mouse_event_count;
-            const bool phase = wcscmp(option, L"--mouse-phase") == 0;
-            fields[2] = 0;
-            if (count == MAX_MOUSE_EVENTS || !parse_fields(value, fields, phase ? 3 : 2) ||
-                fields[1] > (phase ? 3u : 1u) || fields[2] > 3 ||
-                (count != 0 && fields[0] < request->mouse_events[count - 1].cycle)) {
-                return "use ordered mouse-button cycle:state or mouse-phase cycle:x:y events";
+        } else if (wcscmp(option, L"--mouse-button") == 0) {
+            if (!add_input_event(request, INPUT_BUTTON, value)) {
+                return "invalid mouse-button cycle:state event or input order";
             }
-            request->mouse_events[count] = (struct mouse_event){
-                fields[0], phase, (uint8_t)fields[1], (uint8_t)fields[2]};
-            ++request->mouse_event_count;
+        } else if (wcscmp(option, L"--mouse-phase") == 0) {
+            if (!add_input_event(request, INPUT_PHASE, value)) {
+                return "invalid mouse-phase cycle:x:y event or input order";
+            }
+        } else if (wcscmp(option, L"--key") == 0) {
+            if (!add_input_event(request, INPUT_MAC_KEY, value)) {
+                return "invalid key cycle:code:state event or input order";
+            }
+        } else if (wcscmp(option, L"--scancode") == 0) {
+            if (!add_input_event(request, INPUT_PC_SCAN, value)) {
+                return "invalid scancode cycle:byte event or input order";
+            }
         } else if (wcscmp(option, L"--cycles") == 0 && request->cycle_limit == 0) {
             if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > MAX_CYCLES) {
                 return "cycles must be between 1 and 1000000000";
@@ -225,21 +282,35 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->cycle_limit == 0 || request->timeout_ms == 0) {
         return "machine, cycles, and timeout-ms are required";
     }
-    if ((request->rom_path == NULL) == (request->floppy_path == NULL)) {
-        return "supply exactly one ROM or floppy image";
-    }
     if ((request->until.width != 0) + request->stop_at_pc + request->stop_at_post > 1) {
         return "choose one stop condition";
     }
-    if (request->mouse_event_count != 0 &&
-        request->mouse_events[request->mouse_event_count - 1].cycle >= request->cycle_limit) {
-        return "mouse events must precede the cycle limit";
+    if (request->input_event_count != 0 &&
+        request->input_events[request->input_event_count - 1].cycle >= request->cycle_limit) {
+        return "input events must precede the cycle limit";
     }
-    if (request->machine == MACHINE_MAC128K && (request->floppy_path || request->stop_at_post)) {
-        return "floppy and POST conditions require pc286";
+    if (request->machine == MACHINE_MAC128K) {
+        if (request->rom_path == NULL) {
+            return "mac128k requires a ROM";
+        }
+        if (request->stop_at_post || request->disk_path || request->disk_out_path || request->ega_rom_path) {
+            return "POST, hard disk, disk output, and EGA ROM options require pc286";
+        }
+    } else {
+        if (request->rom_path == NULL && request->floppy_path == NULL && request->disk_path == NULL) {
+            return "pc286 requires a ROM, floppy, or hard disk";
+        }
+        if (request->disk_out_path != NULL && request->disk_path == NULL) {
+            return "disk-out requires a hard disk";
+        }
+        if (request->ega_rom_path != NULL && request->rom_path == NULL) {
+            return "ega-rom requires a system ROM";
+        }
     }
-    if (request->machine == MACHINE_PC286 && request->mouse_event_count != 0) {
-        return "mouse events require mac128k";
+    for (size_t index = 0; index < request->input_event_count; ++index) {
+        if ((request->input_events[index].kind == INPUT_PC_SCAN) != (request->machine == MACHINE_PC286)) {
+            return "use scancode for pc286 and key or mouse events for mac128k";
+        }
     }
     const uint32_t ram_size = request->machine == MACHINE_MAC128K ? MAC128K_RAM_SIZE : PC286_VIDEO_END;
     if ((request->until.width && request->until.address > ram_size - request->until.width) ||
@@ -249,9 +320,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     return NULL;
 }
 
-static const char *read_image(const wchar_t *path, uint8_t *data, DWORD expected_size,
-                              const char *size_error)
+static const char *read_image(const wchar_t *path, struct image *image, DWORD minimum_size,
+                              DWORD maximum_size, const char *size_error)
 {
+    if (path == NULL) {
+        return NULL;
+    }
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
@@ -262,17 +336,23 @@ static const char *read_image(const wchar_t *path, uint8_t *data, DWORD expected
     DWORD bytes_read;
     const char *error = NULL;
     if (GetFileType(file) != FILE_TYPE_DISK || !GetFileSizeEx(file, &size) ||
-        size.QuadPart != expected_size) {
+        size.QuadPart < minimum_size || size.QuadPart > maximum_size) {
         error = size_error;
-    } else if (!ReadFile(file, data, expected_size, &bytes_read, NULL) || bytes_read != expected_size) {
-        error = "cannot read complete guest image";
+    } else {
+        image->size = (DWORD)size.QuadPart;
+        image->bytes = malloc(image->size);
+        if (image->bytes == NULL) {
+            error = "cannot allocate guest image";
+        } else if (!ReadFile(file, image->bytes, image->size, &bytes_read, NULL) || bytes_read != image->size) {
+            error = "cannot read complete guest image";
+        }
     }
     CloseHandle(file);
     return error;
 }
 
-static bool write_frame(const wchar_t *path, const char *header, DWORD header_size,
-                        const uint8_t *frame, DWORD frame_size)
+static bool write_new_file(const wchar_t *path, const char *header, DWORD header_size,
+                           const uint8_t *data, DWORD data_size)
 {
     HANDLE file = CreateFileW(path, GENERIC_WRITE | DELETE, 0, NULL, CREATE_NEW,
                               FILE_ATTRIBUTE_NORMAL, NULL);
@@ -281,10 +361,9 @@ static bool write_frame(const wchar_t *path, const char *header, DWORD header_si
     }
 
     DWORD written;
-    bool success = WriteFile(file, header, header_size, &written, NULL) &&
-                   written == header_size &&
-                   WriteFile(file, frame, frame_size, &written, NULL) &&
-                   written == frame_size;
+    bool success = (header_size == 0 ||
+                    (WriteFile(file, header, header_size, &written, NULL) && written == header_size)) &&
+                   WriteFile(file, data, data_size, &written, NULL) && written == data_size;
     if (!success) {
         FILE_DISPOSITION_INFO disposition = {TRUE};
         SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition));
@@ -374,6 +453,23 @@ static int request_error(const char *error)
     return 2;
 }
 
+static bool apply_input(struct machine *machine, struct input_event event)
+{
+    switch (event.kind) {
+    case INPUT_BUTTON:
+        mac128k_set_mouse_button(machine->mac, event.first != 0);
+        return true;
+    case INPUT_PHASE:
+        mac128k_set_mouse_phase(machine->mac, event.first, event.second);
+        return true;
+    case INPUT_MAC_KEY:
+        return mac128k_inject_key(machine->mac, event.first, event.second != 0);
+    case INPUT_PC_SCAN:
+        return pc286_inject_scancode(machine->pc, event.first);
+    }
+    return false;
+}
+
 struct run_result {
     const char *status;
     const char *error;
@@ -389,6 +485,9 @@ static struct run_result run_machine(struct machine *machine, const struct reque
     }
     const double timeout_ticks = (double)frequency.QuadPart * request->timeout_ms / 1000.0;
     const bool use_predicate = request->until.width != 0 || request->stop_at_pc || request->stop_at_post;
+    if (machine->pc != NULL && request->input_event_count != 0) {
+        pc286_expect_input(machine->pc, true);
+    }
     struct machine_state state = get_state(machine);
     size_t next_event = 0;
 
@@ -424,21 +523,21 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             return (struct run_result){"cycle_limit", NULL, use_predicate ? 1 : 0};
         }
 
-        while (next_event < request->mouse_event_count &&
-               request->mouse_events[next_event].cycle <= state.cycles) {
-            const struct mouse_event event = request->mouse_events[next_event];
-            if (event.phase) {
-                mac128k_set_mouse_phase(machine->mac, event.x, event.y);
-            } else {
-                mac128k_set_mouse_button(machine->mac, event.x != 0);
+        while (next_event < request->input_event_count &&
+               request->input_events[next_event].cycle <= state.cycles) {
+            if (!apply_input(machine, request->input_events[next_event])) {
+                return (struct run_result){"machine_fault", "guest keyboard rejected an input event", 1};
             }
             ++next_event;
+            if (machine->pc != NULL && next_event == request->input_event_count) {
+                pc286_expect_input(machine->pc, false);
+            }
         }
 
         const uint64_t previous_cycles = state.cycles;
         uint32_t slice = (uint32_t)(request->cycle_limit - previous_cycles);
-        if (next_event < request->mouse_event_count) {
-            const uint32_t to_event = request->mouse_events[next_event].cycle - (uint32_t)previous_cycles;
+        if (next_event < request->input_event_count) {
+            const uint32_t to_event = request->input_events[next_event].cycle - (uint32_t)previous_cycles;
             if (to_event < slice) {
                 slice = to_event;
             }
@@ -462,29 +561,49 @@ static struct run_result run_machine(struct machine *machine, const struct reque
 
 static const char *create_machine(struct machine *machine, const struct request *request)
 {
-    const bool use_floppy = request->floppy_path != NULL;
-    const DWORD size = use_floppy ? PC286_FLOPPY_SIZE
-        : request->machine == MACHINE_MAC128K ? MAC128K_ROM_SIZE : PC286_ROM_SIZE;
-    uint8_t *image = malloc(size);
-    if (image == NULL) {
-        return "cannot allocate guest image";
-    }
-    const char *error = read_image(use_floppy ? request->floppy_path : request->rom_path,
-                                   image, size, use_floppy ? "floppy must be a 1228800-byte raw image"
-                                                          : "ROM must be a 65536-byte file");
+    const bool mac = request->machine == MACHINE_MAC128K;
+    struct image rom = {0}, floppy = {0}, disk = {0}, ega_rom = {0};
+    const DWORD rom_size = mac ? MAC128K_ROM_SIZE : PC286_ROM_SIZE;
+    const DWORD floppy_size = mac ? MAC128K_FLOPPY_SIZE : PC286_FLOPPY_SIZE;
+    const char *error = read_image(request->rom_path, &rom, rom_size, rom_size,
+                                   "system ROM must be a 65536-byte file");
     if (error == NULL) {
-        if (request->machine == MACHINE_MAC128K) {
-            machine->mac = mac128k_create(image);
-        } else if (use_floppy) {
-            machine->pc = pc286_create_floppy(image, size);
+        error = read_image(request->floppy_path, &floppy, floppy_size,
+                           mac ? MAC128K_FLOPPY_SIZE + 84 + 9600 : floppy_size,
+                           mac ? "Macintosh floppy must be a 400 KiB raw or Disk Copy 4.2 image"
+                               : "PC floppy must be a 1228800-byte raw image");
+    }
+    if (error == NULL) {
+        error = read_image(request->disk_path, &disk, PC286_HARD_DISK_SIZE, PC286_HARD_DISK_SIZE,
+                           "hard disk must be a 21411840-byte raw image");
+    }
+    if (error == NULL) {
+        error = read_image(request->ega_rom_path, &ega_rom, 512, PC286_EGA_ROM_MAX,
+                           "EGA option ROM must be between 512 and 32768 bytes");
+    }
+    if (error == NULL) {
+        if (mac) {
+            machine->mac = mac128k_create(rom.bytes);
+            if (machine->mac != NULL && floppy.bytes != NULL &&
+                !mac128k_insert_floppy(machine->mac, floppy.bytes, floppy.size)) {
+                error = "invalid Macintosh floppy image or could not insert it";
+            }
         } else {
-            machine->pc = pc286_create(image, size);
+            machine->pc = pc286_create_system(rom.bytes, rom.size, floppy.bytes, floppy.size,
+                                              disk.bytes, disk.size);
+            if (machine->pc != NULL && ega_rom.bytes != NULL &&
+                !pc286_load_ega_rom(machine->pc, ega_rom.bytes, ega_rom.size)) {
+                error = "invalid EGA option ROM";
+            }
         }
         if (machine->mac == NULL && machine->pc == NULL) {
             error = "cannot initialize machine or invalid boot image";
         }
     }
-    free(image);
+    free(ega_rom.bytes);
+    free(disk.bytes);
+    free(floppy.bytes);
+    free(rom.bytes);
     return error;
 }
 
@@ -501,8 +620,8 @@ static bool capture_frame(const struct machine *machine, const wchar_t *path)
 {
     if (machine->mac != NULL) {
         static const char header[] = "P4\n512 342\n";
-        return write_frame(path, header, sizeof(header) - 1,
-                           mac128k_frame(machine->mac), MAC128K_FRAME_SIZE);
+        return write_new_file(path, header, sizeof(header) - 1,
+                              mac128k_frame(machine->mac), MAC128K_FRAME_SIZE);
     }
     static const char header[] = "P6\n640 350\n255\n";
     uint8_t *pixels = malloc(PC286_FRAME_SIZE);
@@ -510,7 +629,7 @@ static bool capture_frame(const struct machine *machine, const wchar_t *path)
         return false;
     }
     pc286_frame_rgb(machine->pc, pixels);
-    const bool success = write_frame(path, header, sizeof(header) - 1, pixels, PC286_FRAME_SIZE);
+    const bool success = write_new_file(path, header, sizeof(header) - 1, pixels, PC286_FRAME_SIZE);
     free(pixels);
     return success;
 }
@@ -526,6 +645,7 @@ int wmain(int argc, wchar_t **argv)
     struct machine machine = {0};
     error = create_machine(&machine, &request);
     if (error != NULL) {
+        destroy_machine(&machine);
         return request_error(error);
     }
 
@@ -554,6 +674,13 @@ int wmain(int argc, wchar_t **argv)
     }
     if (request.frame_path != NULL && !capture_frame(&machine, request.frame_path)) {
         result = (struct run_result){"error", "cannot create or write requested frame", 2};
+    }
+    if (request.disk_out_path != NULL && result.exit_code == 0) {
+        const uint8_t *disk = pc286_hard_disk(machine.pc);
+        if (disk == NULL ||
+            !write_new_file(request.disk_out_path, NULL, 0, disk, PC286_HARD_DISK_SIZE)) {
+            result = (struct run_result){"error", "cannot create or write requested disk snapshot", 2};
+        }
     }
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect);
     destroy_machine(&machine);

@@ -55,11 +55,11 @@ def make_floppy():
 
     program.extend(bytes.fromhex(
         "b80300 cd10 b8580e cd10 "  # text mode 3; teletype X
-        "b042 e680 f4"  # POST 42 and halt
+        "b042 e680 fa f4"  # POST 42, then terminal halt
     ))
     for offset in failures:
         program[offset] = len(program) - offset - 1
-    program.extend(bytes.fromhex("b0ff e680 f4"))  # failure POST
+    program.extend(bytes.fromhex("b0ff e680 fa f4"))  # failure POST
 
     image = bytearray(FLOPPY_SIZE)
     image[:len(program)] = program

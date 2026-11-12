@@ -8,6 +8,7 @@ namespace boothush_i286 {
 
 struct FirmwareRegisters {
 	uint16_t ax, bx, cx, dx, es, flags;
+	bool repeat = false;
 };
 
 class Bus {
@@ -16,6 +17,17 @@ public:
     virtual void write_memory(uint32_t address, uint8_t data) = 0;
     virtual uint8_t read_port(uint16_t port) = 0;
     virtual void write_port(uint16_t port, uint8_t data) = 0;
+    virtual uint16_t read_io_word(uint16_t port)
+    {
+        const uint8_t low = read_port(port);
+        return uint16_t(low) | (uint16_t(read_port(uint16_t(port + 1))) << 8);
+    }
+    virtual void write_io_word(uint16_t port, uint16_t data)
+    {
+        write_port(port, uint8_t(data));
+        write_port(uint16_t(port + 1), uint8_t(data >> 8));
+    }
+    virtual uint8_t acknowledge_interrupt() = 0;
     virtual bool firmware_interrupt(uint8_t number, FirmwareRegisters &registers) = 0;
 
 protected:
