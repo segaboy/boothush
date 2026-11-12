@@ -1,0 +1,13 @@
+/.moira-import/
+/out/
+/build/
+__pycache__/
+*.pyc
+*.rom
+*.img
+*.ima
+*.iso
+*.vhd
+*.vdi
+*.pbm
+*.ppm

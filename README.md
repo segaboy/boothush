@@ -1,7 +1,63 @@
 # BootHush
 
-BootHush is a headless Windows 11 emulator project for fast, repeatable ClasSICK development tests. The initial targets are the Macintosh 128K and the 80286 PC configurations needed by ClasSICK, starting with the IBM PC/AT 5170 baseline.
+BootHush is a headless Windows 11 emulator for fast, repeatable ClasSICK development tests. Each invocation loads a local image, runs one isolated guest, returns one JSON result, and exits. It uses guest device state for input and capture.
 
-Codex will use a local API to supply a guest image and machine configuration, run to a condition or timeout, and receive a concise machine-readable result with optional diagnostics. Runs are designed to stop cleanly and leave the host desktop, keyboard, and mouse free for normal use.
+| Profile | Supported test path |
+| --- | --- |
+| `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA VBL and Timer 1, and SCC mouse phase and interrupt support. Verified with ClasSICK replacement ROMs. |
+| `pc286` | Intel 80286 and 640 KiB conventional RAM targeting the IBM PC/AT 5170. Executes a 64 KiB BIOS image from the 286 reset vector or starts a raw 1.2 MB floppy via BootHush's minimal firmware services. Includes POST port capture and a 640 × 350 planar EGA graphics path. |
 
-This repository is at the bootstrap stage. Keep proprietary ROMs and disk images outside the repository.
+Macintosh floppy, keyboard, RTC, serial and sound hardware remain open. The PC profile still needs full PC/AT POST, timer and interrupt controller support, and hard-disk boot and installation. Its floppy firmware covers INT 10h modes 03h and 10h and text output, INT 11h/12h equipment and memory queries, and INT 13h CHS floppy reads. The [EGA profile](docs/ega.md) describes graphics capture and text memory. Use a caller-supplied local image. Keep proprietary ROMs and test media outside the public repository.
+
+## Build and test
+
+Use CMake 3.21 or later with a Windows C11/C++20 toolchain. Install or select Python 3 for tests. The current Windows build was verified with LLVM-MinGW and Ninja. From the source checkout with the tools on PATH:
+
+```powershell
+$build = 'C:\ClasSICK\boothush'
+cmake -S . -B $build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+cmake --build $build
+ctest --test-dir $build --output-on-failure
+```
+
+Choose another writable build directory if needed. To build the executable without Python, add `-DBUILD_TESTING=OFF` when configuring. Default tests generate their own ROMs and floppy images.
+
+- Set `BOOTHUSH_CLASSICK_ROM` to the local 64 KiB startup fixture with SHA-256 `be506ad6e41d06ebcfe11678a4f6a64ba560920b16efa7fef884794f51690005` to verify the original ROM's diagnostic words and framebuffer checksum.
+- Set `BOOTHUSH_CLASSICK_WINDOW_ROM` and `BOOTHUSH_CLASSICK_WINDOW_ROM_SHA256` for the short-collect invert-3 ClasSICK ROM with the CS09 and MWP1 v2 diagnostics. This exercises a scheduled press, release and four quadrature transitions, then checks guest motion and loss counters.
+
+## Local process API
+
+Run `boothush.exe` directly from an existing terminal. From a controller that launches processes with redirected streams, use Windows `CREATE_NO_WINDOW` for a hidden child. Python's `subprocess.run` accepts it as `creationflags=subprocess.CREATE_NO_WINDOW`.
+
+```powershell
+& "$build\boothush.exe" --machine mac128k --rom $rom --cycles 80000000 --timeout-ms 10000 --until 0xb08:4:1 --inspect 0xb00:28
+```
+
+Use one `--machine` and one image. Both `--cycles` (1–1,000,000,000 emulated CPU cycles) and `--timeout-ms` (1–60,000 wall milliseconds for guest execution) are required. Cycle counts can cross the cap by the cost of one CPU step. Image loading and requested capture occur outside the guest execution timer. A process supervisor can also impose an end-to-end timeout.
+
+| Option | Behavior |
+| --- | --- |
+| `--rom PATH` | Read a 65,536-byte ROM. PC mode maps it at the low and high BIOS ranges used during reset. |
+| `--floppy PATH` | PC mode only. Read a 1,228,800-byte raw floppy with a boot signature. The minimal firmware loads its first sector at `0000:7C00`. |
+| `--until ADDRESS:WIDTH:VALUE` | Stop when 1, 2 or 4 physical memory bytes equal the value in guest byte order. |
+| `--until-pc ADDRESS` | Stop at a 24-bit physical instruction address. |
+| `--until-post BYTE` | PC mode only. Stop when the guest writes the value to I/O port `0x80`. |
+| `--inspect ADDRESS:LENGTH` | Return up to 4,096 bytes as hex without triggering guest device reads. |
+| `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
+| `--mouse-button CYCLE:STATE` | Macintosh only. Schedule button state `1` pressed or `0` released. |
+| `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
+| `--cancel-event NAME` | Open an existing Windows event by name. Signalling it stops a run cooperatively. Ctrl+C or Ctrl+Break can also stop a run in an attached console. |
+
+Use one stop condition at most. Numbers accept decimal or `0x` hex. The runner checks conditions at Macintosh instruction boundaries and PC CPU step boundaries, including x86 prefix steps and REP iterations. Physical memory diagnostics cover the Macintosh's 128 KiB RAM or the PC's conventional RAM and EGA aperture below `0xC0000`. Up to 1,024 combined mouse events can be supplied in cycle order, applied at the first instruction boundary at or after the requested cycle.
+
+The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. PC adds `cs`, `ip`, `halted`, and the last POST byte and exception vector when available. Optional `memory` contains the physical address and hexadecimal bytes. A bus fault reports its operation and address.
+
+| Exit code | Result |
+| --- | --- |
+| 0 | `condition_met`, or `cycle_limit` / PC `halted` with no condition requested |
+| 1 | `timeout`, `cancelled`, `machine_fault`, or a cycle limit / PC halt before a requested condition |
+| 2 | `error` in the request, image handling, or diagnostics |
+
+## Third-party code
+
+[Moira](third_party/moira/UPSTREAM.md) provides the 68000 core under MIT. [MAME's i286/i86 core](third_party/mame-i286/README.md) provides the 80286 CPU under BSD-3-Clause. Those directories retain the upstream notices and revision records. BootHush source and test fixtures are kept separate from the ClasSICK OS and ROM repositories.
