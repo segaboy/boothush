@@ -35,6 +35,28 @@ This regression uses injected window messages. A physical mouse run is a separat
 
 ## Record a physical mouse run
 
+For a background injected-window test using the same ROM and no visible window, run the following. The coordinates are positions in BootHush's 512×342 input viewport. The first event anchors the window pointer. Button actions use logical primary messages, independently of the Windows swapped-button setting.
+
+```powershell
+$trace = Join-Path $env:TEMP ('boothush-' + [guid]::NewGuid().ToString('N') + '.bhmouse')
+$result = & $exe --machine mac128k --rom $rom --cycles 205000000 --timeout-ms 20000 --mouse-dcd-invert 3 --mouse-record $trace --inspect 0xb00:1024 `
+  --window-mouse 100000000:256:171:0 --window-mouse 108000000:100:80:0 `
+  --window-mouse 120000000:100:80:1 --window-mouse 128000000:132:80:2 `
+  --window-mouse 136000000:132:80:3 --window-mouse 144000000:148:80:0 `
+  --window-mouse 152000000:148:80:1 --window-mouse 160000000:148:56:2 `
+  --window-mouse 168000000:148:56:3 --window-mouse 176000000:148:64:0 `
+  --window-mouse 184000000:150:110:0 --window-mouse 192000000:150:110:1 `
+  --window-mouse 192000000:150:110:3 | ConvertFrom-Json
+$replay = & $exe --machine mac128k --rom $rom --cycles 205000000 --timeout-ms 20000 --mouse-replay $trace --inspect 0xb00:1024 | ConvertFrom-Json
+$result.input_source
+$result.mouse
+$result.memory.bytes -ceq $replay.memory.bytes
+```
+
+The verified candidate reaches pointer `(150,110)`, window `(112,46)`, three presses, released button, pattern `1`, and zero pending transitions. `input_source` reports `injected_window_messages`. This exercises the owned window procedure and guest but does not use operating-system mouse delivery or a physical device. A controller can launch BootHush with `CREATE_NO_WINDOW` to keep its console hidden.
+
+The following section describes a separately requested interactive session that opens a visible window.
+
 ```powershell
 $capture = Join-Path $build ('mouse-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $capture | Out-Null

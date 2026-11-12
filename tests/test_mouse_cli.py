@@ -1,5 +1,9 @@
 import struct
+import subprocess
 import unittest
+import os
+import hashlib
+from pathlib import Path
 
 from test_boot import BootHushTestCase, make_rom
 
@@ -44,6 +48,68 @@ def make_mouse_probe_rom():
 
 
 class MacMouseCliTests(BootHushTestCase):
+    @unittest.skipUnless(os.environ.get("BOOTHUSH_CLASSICK_LIVE_ROM"), "ClasSICK live ROM not supplied")
+    def test_classick_background_window_drags(self):
+        rom = Path(os.environ["BOOTHUSH_CLASSICK_LIVE_ROM"])
+        self.assertEqual(hashlib.sha256(rom.read_bytes()).hexdigest(),
+                         "faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c")
+        self.rom.write_bytes(rom.read_bytes())
+        trace = self.scratch / "candidate.bhmouse"
+        frame = self.scratch / "candidate.pbm"
+        events = ["100000000:256:171:0", "108000000:100:80:0", "120000000:100:80:1",
+                  "128000000:132:80:2", "136000000:132:80:3", "144000000:148:80:0",
+                  "152000000:148:80:1", "160000000:148:56:2", "168000000:148:56:3",
+                  "176000000:148:64:0", "184000000:150:110:0", "192000000:150:110:1",
+                  "192000000:150:110:3"]
+        options = [value for event in events for value in ("--window-mouse", event)]
+        result = self.boot("--mouse-dcd-invert", "3", "--mouse-record", trace,
+                           "--inspect", "0xb00:1024", "--frame", frame, *options,
+                           cycles=205000000, timeout_ms=20000)
+        self.assertEqual(result.pop("input_source"), "injected_window_messages")
+        self.assertEqual(result["mouse"]["pending"], 0)
+        data = bytes.fromhex(result["memory"]["bytes"])
+        pos = data.index(b"MWP1")
+        words = struct.unpack_from(">32I", data, pos)
+        self.assertEqual((words[9], *words[13:18], words[22]), (0, 150, 110, 112, 46, 1, 0))
+        self.assertEqual(struct.unpack_from(">I", data, data.index(b"MMD1") + 4)[0], 0)
+        self.assertEqual(struct.unpack_from(">I", data, data.index(b"CS09") + 12)[0], 3)
+        replay_frame = self.scratch / "replay.pbm"
+        replay = self.boot("--mouse-replay", trace, "--inspect", "0xb00:1024",
+                           "--frame", replay_frame, cycles=205000000, timeout_ms=20000)
+        self.assertEqual(result, replay)
+        self.assertEqual(frame.read_bytes(), replay_frame.read_bytes())
+
+    def test_help_and_version(self):
+        for option, expected in (("--help", "--window-mouse"), ("--version", "BootHush build")):
+            result = subprocess.run([self.exe, option], capture_output=True, text=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(expected, result.stdout)
+
+    def test_invisible_window_drag_records_and_replays(self):
+        self.rom.write_bytes(make_mouse_probe_rom())
+        trace = self.scratch / "window.bhmouse"
+        result = self.boot("--mouse-dcd-invert", "1", "--mouse-vbl-guard", "1024",
+                           "--mouse-record", trace, "--inspect", "0xb00:8",
+                           "--window-mouse", "130240:100:100:0",
+                           "--window-mouse", "130240:101:99:0",
+                           "--window-mouse", "130240:101:99:1",
+                           "--window-mouse", "140000:102:99:2",
+                           "--window-mouse", "150000:102:99:3",
+                           "--window-mouse", "160000:103:99:0", cycles=800000)
+        self.assertEqual(result.pop("input_source"), "injected_window_messages")
+        self.assertEqual(result["mouse"]["pending"], 0)
+        replay = self.boot("--mouse-replay", trace, "--inspect", "0xb00:8", cycles=800000)
+        self.assertEqual(result, replay)
+        rows = [line.split()[-1] for line in trace.read_text().splitlines()[1:]]
+        self.assertEqual(rows, ["0", "2", "0", "1", "0"])
+
+    def test_empty_recording_replays(self):
+        trace = self.scratch / "empty.bhmouse"
+        trace.write_text("BHMOUSE1 8192 0 10000 4096\n", encoding="ascii")
+        result = self.boot("--mouse-replay", trace, cycles=11000)
+        self.assertEqual(result["mouse"], {"samples": 0, "steps": 0, "pending": 0})
+
     def test_replay_queues_final_boundary_sample_without_advancing_guest(self):
         self.rom.write_bytes(make_rom(bytes.fromhex("60fe")))
         baseline = self.boot(cycles=512)

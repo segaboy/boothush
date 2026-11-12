@@ -17,12 +17,12 @@
 enum {
     MAX_INSPECT_BYTES = 4096,
     MAX_INPUT_EVENTS = 1024,
-    MAX_CYCLES = 1000000000,
-    MAX_TIMEOUT_MS = 60000,
+    MAX_TIMEOUT_MS = 3600000,
     CYCLE_SLICE = 256,
     MAC_CLOCK_HZ = 7833600,
     LIVE_PUMP_INTERVAL_MS = 2,
 };
+#define MAX_CYCLES UINT32_C(4000000000)
 
 struct predicate {
     uint32_t address;
@@ -35,13 +35,14 @@ struct inspection {
     uint32_t length;
 };
 
-enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MOTION, INPUT_MAC_KEY, INPUT_PC_SCAN };
+enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MOTION, INPUT_MAC_KEY, INPUT_PC_SCAN, INPUT_WINDOW };
 
 struct input_event {
     uint32_t cycle;
     enum input_kind kind;
     int32_t first;
     int32_t second;
+    uint32_t action;
 };
 
 enum machine_kind { MACHINE_UNSET, MACHINE_MAC128K, MACHINE_PC286 };
@@ -77,6 +78,7 @@ struct request {
     bool mouse_witness_range_set;
     bool raw_mouse_phases;
     bool relative_motion;
+    bool window_input;
     struct input_event input_events[MAX_INPUT_EVENTS];
     size_t input_event_count;
 };
@@ -99,6 +101,7 @@ struct mouse_session {
     size_t replay_index;
     uint64_t accepted;
     uint64_t emitted;
+    bool injected_window;
 };
 
 struct machine_state {
@@ -199,7 +202,14 @@ static bool add_input_event(struct request *request, enum input_kind kind, const
         return false;
     }
     struct input_event event = {.kind = kind};
-    if (kind == INPUT_MOTION) {
+    if (kind == INPUT_WINDOW) {
+        uint32_t fields[4];
+        if (!parse_fields(value, fields, 4) || fields[1] >= 512 || fields[2] >= 342 || fields[3] > 3) {
+            return false;
+        }
+        event.cycle = fields[0]; event.first = (int32_t)fields[1];
+        event.second = (int32_t)fields[2]; event.action = fields[3];
+    } else if (kind == INPUT_MOTION) {
         if (!parse_number(&value, &event.cycle) || *value++ != L':' ||
             !parse_delta(&value, &event.first) || *value++ != L':' ||
             !parse_delta(&value, &event.second) || *value != L'\0') {
@@ -233,6 +243,7 @@ static bool add_input_event(struct request *request, enum input_kind kind, const
             }
             break;
         case INPUT_MOTION:
+        case INPUT_WINDOW:
             return false;
         }
         event.cycle = fields[0];
@@ -244,6 +255,7 @@ static bool add_input_event(struct request *request, enum input_kind kind, const
     }
     request->raw_mouse_phases |= kind == INPUT_PHASE;
     request->relative_motion |= kind == INPUT_MOTION;
+    request->window_input |= kind == INPUT_WINDOW;
     request->input_events[count] = event;
     ++request->input_event_count;
     return true;
@@ -298,7 +310,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_witness_path = value;
         } else if (wcscmp(option, L"--mouse-witness-range") == 0 && !request->mouse_witness_range_set) {
             if (!parse_fields(value, fields, 2) || fields[0] > fields[1] || fields[1] > MAX_CYCLES) {
-                return "mouse-witness-range requires ordered first:last cycles from 0 to 1000000000";
+                return "mouse-witness-range requires ordered first:last cycles from 0 to 4000000000";
             }
             request->mouse_witness_range_set = true;
             request->mouse_witness_first = fields[0];
@@ -320,6 +332,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
             request->mouse_guard_set = true;
             request->mouse_vbl_guard = fields[0];
+        } else if (wcscmp(option, L"--window-mouse") == 0) {
+            if (!add_input_event(request, INPUT_WINDOW, value)) {
+                return "invalid window-mouse cycle:x:y:action event or input order";
+            }
         } else if (wcscmp(option, L"--mouse-button") == 0) {
             if (!add_input_event(request, INPUT_BUTTON, value)) {
                 return "invalid mouse-button cycle:state event or input order";
@@ -342,12 +358,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
         } else if (wcscmp(option, L"--cycles") == 0 && request->cycle_limit == 0) {
             if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > MAX_CYCLES) {
-                return "cycles must be between 1 and 1000000000";
+                return "cycles must be between 1 and 4000000000";
             }
             request->cycle_limit = fields[0];
         } else if (wcscmp(option, L"--timeout-ms") == 0 && request->timeout_ms == 0) {
             if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > MAX_TIMEOUT_MS) {
-                return "timeout-ms must be between 1 and 60000";
+                return "timeout-ms must be between 1 and 3600000";
             }
             request->timeout_ms = fields[0];
         } else if (wcscmp(option, L"--until") == 0 && request->until.width == 0) {
@@ -391,7 +407,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->input_events[request->input_event_count - 1].cycle >= request->cycle_limit) {
         return "input events must precede the cycle limit";
     }
-    const bool mouse_bridge = request->live_scale || request->relative_motion || request->mouse_replay_path;
+    const bool mouse_bridge = request->live_scale || request->relative_motion || request->mouse_replay_path || request->window_input;
     const bool mouse_settings = request->mouse_edge_cycles || request->mouse_invert_set ||
                                 request->mouse_guard_set;
     if (request->machine != MACHINE_MAC128K &&
@@ -410,8 +426,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->raw_mouse_phases && mouse_bridge) {
         return "raw mouse phases cannot be mixed with relative motion, replay or live input";
     }
-    if (request->mouse_record_path != NULL && request->live_scale == 0) {
-        return "mouse-record requires live input";
+    if (request->mouse_record_path != NULL && request->live_scale == 0 && !request->window_input) {
+        return "mouse-record requires live input or window-mouse";
     }
     if (request->mouse_replay_path != NULL &&
         (request->live_scale || mouse_settings)) {
@@ -419,6 +435,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     }
     if (!mouse_bridge && mouse_settings) {
         return "mouse settings require live input or relative motion";
+    }
+    if (request->window_input && (request->live_scale || request->relative_motion || request->mouse_replay_path)) {
+        return "window-mouse cannot be mixed with live, relative motion or replay";
     }
     if (request->machine == MACHINE_MAC128K) {
         if (request->rom_path == NULL) {
@@ -555,7 +574,7 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
 
 static const char *open_mouse_session(struct mouse_session *mouse, const struct request *request)
 {
-    if (!request->live_scale && !request->relative_motion && !request->mouse_replay_path) {
+    if (!request->live_scale && !request->relative_motion && !request->mouse_replay_path && !request->window_input) {
         return NULL;
     }
     uint32_t edge_cycles = request->mouse_edge_cycles ? request->mouse_edge_cycles
@@ -592,6 +611,13 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         mouse->window = mac_live_window_create(request->live_scale, true);
         if (mouse->window == NULL) {
             return "cannot create the live Mac window";
+        }
+    }
+    if (request->window_input) {
+        mouse->injected_window = true;
+        mouse->window = mac_live_window_create(1, false);
+        if (mouse->window == NULL) {
+            return "cannot create the invisible test window";
         }
     }
     return NULL;
@@ -690,6 +716,9 @@ static void print_result(const char *status, enum machine_kind machine,
     if (mouse != NULL && mouse->bridge != NULL) {
         printf(",\"mouse\":{\"samples\":%" PRIu64 ",\"steps\":%" PRIu64 ",\"pending\":%" PRIu32 "}",
                mouse->accepted, mouse->emitted, mac_mouse_pending(mouse->bridge));
+        if (mouse->injected_window) {
+            fputs(",\"input_source\":\"injected_window_messages\"", stdout);
+        }
     }
     if (bytes != NULL && inspect.length != 0) {
         printf(",\"memory\":{\"address\":%" PRIu32 ",\"bytes\":\"", inspect.address);
@@ -725,6 +754,18 @@ static bool apply_input(struct machine *machine, struct mouse_session *mouse,
     case INPUT_MOTION:
         return queue_mouse_sample(mouse, (mac_mouse_sample){
             .cycle = cycle, .dx = event.first, .dy = event.second});
+    case INPUT_WINDOW:
+        if (!mac_live_window_inject(mouse->window, event.first, event.second, event.action)) {
+            return false;
+        }
+        mac_live_event input;
+        while (mac_live_window_next_event(mouse->window, &input)) {
+            if (!queue_mouse_sample(mouse, (mac_mouse_sample){cycle, input.dx, input.dy,
+                                                               input.button_changed, input.pressed})) {
+                return false;
+            }
+        }
+        return true;
     case INPUT_MAC_KEY:
         return mac128k_inject_key(machine->mac, event.first, event.second != 0);
     case INPUT_PC_SCAN:
@@ -847,7 +888,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         }
 
         uint64_t live_target = cycle_limit;
-        if (mouse->window != NULL) {
+        if (request->live_scale != 0) {
             if (now.QuadPart >= next_pump) {
                 next_pump = now.QuadPart + pump_interval;
                 const mac_live_status status = refresh_live(machine, mouse, state, &presented_vbl);
@@ -872,6 +913,9 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                request->input_events[next_event].cycle <= state.cycles) {
             const struct input_event event = request->input_events[next_event];
             if (!apply_input(machine, mouse, event, state.cycles)) {
+                if (event.kind == INPUT_WINDOW) {
+                    return (struct run_result){"input_error", "window mouse event rejected or input queue full", 1};
+                }
                 if (event.kind == INPUT_MOTION || event.kind == INPUT_BUTTON) {
                     return (struct run_result){"input_overflow", "mouse bridge queue is full", 1};
                 }
@@ -997,6 +1041,28 @@ static bool capture_frame(const struct machine *machine, const wchar_t *path)
 
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc == 2 && wcscmp(argv[1], L"--version") == 0) {
+        puts("BootHush build " __DATE__ " " __TIME__ "; identify exact executable with SHA-256");
+        return 0;
+    }
+    if (argc == 2 && wcscmp(argv[1], L"--help") == 0) {
+        puts("BootHush Windows emulator\n"
+             "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
+             "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
+             "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
+             "Output: --inspect ADDRESS:LENGTH --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
+             "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
+             "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
+             "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
+             "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
+             "  --mouse-witness-range FIRST:LAST --mouse-edge-cycles N --mouse-vbl-guard N\n"
+             "  --mouse-dcd-invert MASK\n"
+             "PC input: --scancode CYCLE:BYTE\n"
+             "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events, 4096 inspected bytes.\n"
+             "Exit 0 completed, 1 timeout/cancel/fault or unmet condition, 2 invalid request/output.\n"
+             "Only --live opens a visible window. See README.md for formats and timing.");
+        return 0;
+    }
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     struct request request = {0};
     const char *error = parse_request(argc, argv, &request);

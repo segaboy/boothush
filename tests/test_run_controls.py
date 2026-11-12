@@ -32,6 +32,9 @@ class RunControlTests(BootHushTestCase):
 
         result = self.boot("--cancel-event", name, exit_code=1)
         self.assertEqual(result["status"], "cancelled")
+        extended = self.boot("--cancel-event", name, cycles=4_000_000_000,
+                             timeout_ms=600_000, exit_code=1)
+        self.assertEqual(extended["status"], "cancelled")
 
     def test_frame_never_overwrites_an_existing_file(self):
         frame = self.scratch / "existing.pbm"

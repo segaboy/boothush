@@ -34,6 +34,9 @@ mac_live_status mac_live_window_pump(mac_live_window *window);
 /* Motion is relative to the display viewport, in guest pixels, with positive Y down. */
 bool mac_live_window_next_event(mac_live_window *window, mac_live_event *event);
 
+/* Inject a logical primary-button event into an invisible test window. */
+bool mac_live_window_inject(mac_live_window *window, unsigned x, unsigned y, unsigned action);
+
 /* Copy an MSB-first packed monochrome frame, where 1 is black. */
 void mac_live_window_present(mac_live_window *window, const uint8_t frame[MAC128K_FRAME_SIZE]);
 

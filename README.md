@@ -36,7 +36,7 @@ Run `boothush.exe` directly from an existing terminal. When a controller launche
 & "$build\boothush.exe" --machine pc286 --floppy $installer --hard-disk $blankDisk --disk-out $newDisk --cycles 4000000 --timeout-ms 10000
 ```
 
-Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC accepts a system ROM with optional media, or uses built-in firmware to boot supplied media with floppy first. Both `--cycles` (1–1,000,000,000 emulated CPU cycles) and `--timeout-ms` (1–60,000 wall milliseconds for guest execution) are required. Cycle counts can cross the cap by the cost of one CPU step. Image loading and requested capture occur outside the guest execution timer. A process supervisor can also impose an end-to-end timeout.
+Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC accepts a system ROM with optional media, or uses built-in firmware to boot supplied media with floppy first. Both `--cycles` (1–4,000,000,000 emulated CPU cycles) and `--timeout-ms` (1–3,600,000 wall milliseconds for guest execution) are required. Cycle counts can cross the cap by the cost of one CPU step. Image loading and requested capture occur outside the guest execution timer. A process supervisor can also impose an end-to-end timeout. `--help` lists options and `--version` reports build date and time. Use `Get-FileHash` on the executable to identify exact binary bytes.
 
 | Option | Behavior |
 | --- | --- |
@@ -53,8 +53,9 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-button CYCLE:STATE` | Macintosh only. Schedule button state `1` pressed or `0` released. |
 | `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
 | `--mouse-motion CYCLE:DX:DY` | Macintosh only. Queue signed pixel deltas through the same paced quadrature bridge used for live input. Positive X is right and positive Y is down. Scheduled buttons join the same queue. |
+| `--window-mouse CYCLE:X:Y:ACTION` | Macintosh only. Deliver a logical mouse event to an invisible owned window at a guest cycle. Actions are 0 for unpressed movement, 1 for primary press, 2 for held movement, and 3 for release. X is 0–511 and Y is 0–341. Events must be in cycle order. |
 | `--live SCALE` | Macintosh only. Open a native mouse window at integer scale 1–4 and pace the guest to its nominal 7.8336 MHz clock. |
-| `--mouse-record PATH` | With `--live`, write the accepted mouse samples and their guest cycles to a new trace file. |
+| `--mouse-record PATH` | With `--live` or `--window-mouse`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
 | `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |
@@ -72,7 +73,7 @@ The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. P
 | Exit code | Result |
 | --- | --- |
 | 0 | `condition_met`, or `cycle_limit` / live `closed` / PC `halted` with no condition requested |
-| 1 | `timeout`, `cancelled`, `machine_fault`, `input_overflow`, or an exit before a requested condition |
+| 1 | `timeout`, `cancelled`, `machine_fault`, `input_overflow`, `input_error`, or an exit before a requested condition |
 | 2 | `error` in the request, image handling, or diagnostics |
 
 ## Live Mac mouse tests
@@ -89,6 +90,14 @@ For the anchored ClasSICK candidate, run this from a terminal with `$rom` set to
 Activate the BootHush window and wait for the ROM desktop. The first click on the inactive viewport activates it. Move the guest pointer using relative motion and use the displayed guest pointer to aim. Entering the viewport anchors motion at the current host position. A held primary button captures movement through release, with coordinates clamped at the viewport edges. Let the pointer finish moving before closing if the trace should include the whole action. The JSON `mouse` fields report accepted `samples`, delivered `steps`, and `pending` transitions at stop.
 
 The text trace starts with `BHMOUSE1 EDGE_CYCLES DCD_INVERT STOP_CYCLE VBL_GUARD`. Each following line stores `CYCLE DX DY BUTTON`, with `0` for unchanged, `1` for release, and `2` for press. Reuse the same ROM, media, and any scheduled `--key` events when replaying. The run limits still apply. `--inspect` can read the ClasSICK ROM's `MWP1` state, `MLC1` loss counters, `MMD1` omissions, and `MCM1` coalescing counter. `--mouse-phase` remains available for exact pin-level experiments.
+
+`--window-mouse` runs the normal window message handler with an invisible owned window and labels its JSON result `input_source: injected_window_messages`. This is independent of the Windows primary-button setting and uses no global mouse injection. Direct `--mouse-motion` and `--mouse-button` events are scheduled emulator input. Automated interaction with a visible `--live` window uses Windows' actual input path. A person operating a physical mouse is a separate observation. The visible window remains an explicit opt-in. Start a controller with `CREATE_NO_WINDOW` to prevent a console window, too.
+
+The live clock is paced to 7,833,600 guest cycles per second. For a longer bounded run use, for example, `--cycles 4000000000 --timeout-ms 600000`, which allows roughly 8.5 minutes before the cycle cap. Close the window or signal `--cancel-event` to stop earlier. The original 60-second timeout remains available by requesting `--timeout-ms 60000`.
+
+The 8,192-cycle edge spacing and ±4,096-cycle VBL guard were chosen empirically for reliable delivery to the tested ClasSICK ROM. They are input pacing controls, with no physical mouse timing measurements behind them. A zero guard and shorter edge spacing are available to expose guest timing sensitivity. The model produces Gray-code phases 0, 1, 3, 2 and uses phase bit 0 as SCC DCD and bit 1 as VIA input. It latches the first enabled SCC DCD transition until acknowledgement, retains a pending change when the acknowledged latch differs from the live level, and samples the VIA phase on the guest's read. The CPU executes whole instructions, so events land at instruction boundaries and device witness cycles reflect emulator timing. This model has not been validated against physical Macintosh timing. A phase change during an SCC pending interval can therefore expose a guest race in this simulation, without establishing physical-hardware behavior or identifying the cause of every missed movement.
+
+Recordings reproduce accepted input at guest cycle boundaries with the same ROM, media, settings and scheduled keys. `mouse.pending` reports transitions left at stop. Witness headers report the number of rows dropped when the 65,536-row capacity is reached. Different ROMs, input settings, early timeouts or changed emulator builds may change results. Matching replay establishes reproduction within BootHush.
 
 ### Device trace
 

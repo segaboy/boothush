@@ -415,6 +415,25 @@ bool mac_live_window_next_event(mac_live_window *window, mac_live_event *event)
     return true;
 }
 
+bool mac_live_window_inject(mac_live_window *window, unsigned x, unsigned y, unsigned action)
+{
+    if (!window || window->visible || !window->hwnd || x >= frame_width || y >= frame_height || action > 3) {
+        return false;
+    }
+    if ((action == 0 || action == 1) ? window->pressed : !window->pressed) {
+        return false;
+    }
+    RECT client{};
+    if (!GetClientRect(window->hwnd, &client)) {
+        return false;
+    }
+    const auto view = window->viewport(client);
+    const LPARAM point = MAKELPARAM(view.left + x * view.scale, view.top + y * view.scale);
+    const UINT message = action == 1 ? WM_LBUTTONDOWN : action == 3 ? WM_LBUTTONUP : WM_MOUSEMOVE;
+    SendMessageW(window->hwnd, message, action == 1 || action == 2 ? MK_LBUTTON : 0, point);
+    return !window->input_overflow;
+}
+
 void mac_live_window_present(mac_live_window *window, const uint8_t frame[MAC128K_FRAME_SIZE])
 {
     if (window->hwnd != nullptr && std::memcmp(window->frame.data(), frame, window->frame.size()) != 0) {
