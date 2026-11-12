@@ -22,25 +22,41 @@ def sample(address, mask, offset):
     return struct.pack(">HIHHHI", 0x1039, address, 0x0200, mask, 0x13C0, RESULT + offset)
 
 
+def make_mouse_probe_rom():
+    program = (
+        bytes.fromhex("13fc 0000 00ef fffe 13fc 0010 00ef e7fe")  # Clear overlay.
+        + wait_for_bit(VIA_PORT_B, 4, False)
+        + sample(VIA_PORT_B, 0x38, 0)
+        + sample(SCC_A, 0x08, 1)
+        + sample(SCC_B, 0x08, 2)
+        + wait_for_bit(SCC_A, 3, True)
+        + sample(VIA_PORT_B, 0x38, 3)
+        + sample(SCC_A, 0x08, 4)
+        + sample(SCC_B, 0x08, 5)
+        + wait_for_bit(VIA_PORT_B, 3, False)
+        + sample(VIA_PORT_B, 0x38, 6)
+        + wait_for_bit(VIA_PORT_B, 3, True)
+        + sample(VIA_PORT_B, 0x38, 7)
+        + struct.pack(">HHI", 0x13FC, 0x80, 0x1A700)  # Mark completion in the frame.
+        + bytes.fromhex("60fe")
+    )
+    return make_rom(program)
+
+
 class MacMouseCliTests(BootHushTestCase):
+    def test_replay_queues_final_boundary_sample_without_advancing_guest(self):
+        self.rom.write_bytes(make_rom(bytes.fromhex("60fe")))
+        baseline = self.boot(cycles=512)
+        stop = baseline["cycles"]
+        trace = self.scratch / "final-boundary.bhmouse"
+        trace.write_text(f"BHMOUSE1 8192 0 {stop} 0\n{stop} 1 0 2\n", encoding="ascii")
+
+        replay = self.boot("--mouse-replay", trace, cycles=stop + 100)
+        self.assertEqual(replay["mouse"], {"samples": 1, "steps": 0, "pending": 3})
+        self.assertEqual({key: value for key, value in replay.items() if key != "mouse"}, baseline)
+
     def test_relative_motion_and_replay_reach_guest_pins(self):
-        program = (
-            bytes.fromhex("13fc 0000 00ef fffe 13fc 0010 00ef e7fe")  # Clear overlay.
-            + wait_for_bit(VIA_PORT_B, 4, False)
-            + sample(VIA_PORT_B, 0x38, 0)
-            + sample(SCC_A, 0x08, 1)
-            + sample(SCC_B, 0x08, 2)
-            + wait_for_bit(SCC_A, 3, True)
-            + sample(VIA_PORT_B, 0x38, 3)
-            + sample(SCC_A, 0x08, 4)
-            + sample(SCC_B, 0x08, 5)
-            + wait_for_bit(VIA_PORT_B, 3, False)
-            + sample(VIA_PORT_B, 0x38, 6)
-            + wait_for_bit(VIA_PORT_B, 3, True)
-            + sample(VIA_PORT_B, 0x38, 7)
-            + bytes.fromhex("60fe")
-        )
-        self.rom.write_bytes(make_rom(program))
+        self.rom.write_bytes(make_mouse_probe_rom())
         trace = self.scratch / "mouse.bhmouse"
         trace.write_bytes(VALID_TRACE)
 

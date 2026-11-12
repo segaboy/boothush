@@ -56,6 +56,8 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--live SCALE` | Macintosh only. Open a native mouse window at integer scale 1–4 and pace the guest to its nominal 7.8336 MHz clock. |
 | `--mouse-record PATH` | With `--live`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
+| `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
+| `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |
 | `--mouse-edge-cycles N` | With `--live` or `--mouse-motion`, set the minimum interval between quadrature transitions in guest cycles. The default is 8,192. |
 | `--mouse-dcd-invert MASK` | With `--live` or `--mouse-motion`, flip direction for bit 0 (X) and bit 1 (Y). The default is `0`. The anchored ClasSICK candidate uses `3`. |
 | `--mouse-vbl-guard N` | With `--live` or `--mouse-motion`, leave `N` guest cycles on either side of each vertical blank before applying a transition. The default is 4,096. Use `0` to exercise unrestricted VBL timing. |
@@ -82,9 +84,19 @@ For the anchored ClasSICK candidate, run this from a terminal with `$rom` set to
 & "$build\boothush.exe" --machine mac128k --rom $rom --mouse-replay $trace --cycles 440000000 --timeout-ms 60000 --inspect 0xb00:1024
 ```
 
-Activate the BootHush window and wait for the ROM desktop. The mouse is relative to the guest viewport. Entering it anchors motion, and a held primary button captures motion through release. Let the pointer finish moving before closing if the trace should include the whole action. The JSON `mouse` fields report accepted `samples`, delivered `steps`, and `pending` transitions at stop.
+Activate the BootHush window and wait for the ROM desktop. The first click on the inactive viewport activates it. Move the guest pointer using relative motion and use the displayed guest pointer to aim. Entering the viewport anchors motion at the current host position. A held primary button captures movement through release, with coordinates clamped at the viewport edges. Let the pointer finish moving before closing if the trace should include the whole action. The JSON `mouse` fields report accepted `samples`, delivered `steps`, and `pending` transitions at stop.
 
 The text trace starts with `BHMOUSE1 EDGE_CYCLES DCD_INVERT STOP_CYCLE VBL_GUARD`. Each following line stores `CYCLE DX DY BUTTON`, with `0` for unchanged, `1` for release, and `2` for press. Reuse the same ROM, media, and any scheduled `--key` events when replaying. The run limits still apply. `--inspect` can read the ClasSICK ROM's `MWP1` state, `MLC1` loss counters, `MMD1` omissions, and `MCM1` coalescing counter. `--mouse-phase` remains available for exact pin-level experiments.
+
+### Device trace
+
+To see which signals the guest observed, replay the same input with a device trace over the cycle window of interest.
+
+```powershell
+& "$build\boothush.exe" --machine mac128k --rom $rom --mouse-replay $trace --cycles 440000000 --timeout-ms 10000 --mouse-witness $newWitness --mouse-witness-range 108000000:110000000
+```
+
+`BHMACMOUSE1 FIRST LAST STOP COUNT DROPPED` gives the requested range, actual stop, number of rows saved, and number dropped after the 65,536-row limit. The next line labels the columns. Rows show pin or button changes, SCC control accesses, mouse and interrupt-related VIA accesses, and CPU interrupt-level changes. `snapshot` records the initial state when the guest reaches the range. `scc_latched` and `scc_dcd` use bit 0 for X and bit 1 for Y, and `scc_pending` uses the SCC RR3 encoding. `address`, `reg`, and `value` describe the bus access on SCC/VIA rows. Device state is sampled after the event. Cycle labels use the emulator's instruction timing, with file order preserving event order within a cycle. The trace has no guest-visible side effects.
 
 ## Third-party code
 

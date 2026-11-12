@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -153,12 +154,23 @@ public:
         require(PostMessageW(hwnd_, message, 0, 0) != 0, "cannot post owned-window message");
     }
 
-    void pump()
+    std::vector<mac_live_event> pump_events()
     {
         require(mac_live_window_pump(window_.get()) == MAC_LIVE_RUNNING, "window input pump failed");
-        const auto cycle = current_cycle();
+        std::vector<mac_live_event> events;
         mac_live_event event{};
         while (mac_live_window_next_event(window_.get(), &event)) {
+            events.push_back(event);
+        }
+        require(GetCapture() != hwnd_, "the hidden test window captured system mouse input");
+        return events;
+    }
+
+    void pump()
+    {
+        const auto events = pump_events();
+        const auto cycle = current_cycle();
+        for (const auto &event : events) {
             require(mac_mouse_queue_motion(mouse_.get(), cycle, event.dx, event.dy),
                     "motion queue rejected a window event");
             if (event.button_changed) {
@@ -166,7 +178,6 @@ public:
                         "button queue rejected a window event");
             }
         }
-        require(GetCapture() != hwnd_, "the hidden test window captured system mouse input");
     }
 
     // Execute at most one pending pin transition, at the same instruction
@@ -242,6 +253,39 @@ private:
     HWND hwnd_ = nullptr;
     int scale_;
 };
+
+void test_captured_edges()
+{
+    LiveMac live(make_via_probe(), 0, 2);
+    live.post(WM_MOUSEMOVE, {2, 1});
+    live.post(WM_LBUTTONDOWN, {2, 1}, MK_LBUTTON);
+    live.post(WM_MOUSEMOVE, {-8, -6}, MK_LBUTTON);
+    live.post(WM_MOUSEMOVE, {-25, -20}, MK_LBUTTON);
+    live.post(WM_MOUSEMOVE, {1, 1}, MK_LBUTTON);
+    live.post(WM_MOUSEMOVE, {530, 360}, MK_LBUTTON);
+    live.post(WM_LBUTTONUP, {570, 390});
+    live.post(WM_MOUSEMOVE, {510, 340});
+    live.post(WM_MOUSEMOVE, {509, 340});
+
+    const auto events = live.pump_events();
+    constexpr std::array<mac_live_event, 6> expected{{
+        {0, 0, true, true},
+        {-2, -1, false, true},
+        {1, 1, false, true},
+        {510, 340, false, true},
+        {0, 0, true, false},
+        {-1, 0, false, false},
+    }};
+    require(events.size() == expected.size(), "captured edge motion produced extra or missing events");
+    for (std::size_t index = 0; index < events.size(); ++index) {
+        const auto &got = events[index];
+        const auto &want = expected[index];
+        require(got.dx == want.dx && got.dy == want.dy && got.button_changed == want.button_changed &&
+                    got.pressed == want.pressed,
+                "captured drag produced the wrong movement or button state");
+    }
+    live.close();
+}
 
 void test_guest_pins()
 {
@@ -387,6 +431,7 @@ uint32_t test_candidate(const Rom &rom)
 int main()
 {
     try {
+        test_captured_edges();
         test_guest_pins();
         const DWORD length = GetEnvironmentVariableW(fixture_variable, nullptr, 0);
         if (length == 0) {

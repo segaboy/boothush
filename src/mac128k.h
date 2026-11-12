@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mac_mouse_witness.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -45,6 +47,13 @@ void mac128k_set_mouse_button(mac128k *machine, bool pressed);
 
 /* Sets raw quadrature phases. Bit 0 is SCC DCD, bit 1 is VIA PB4 (X) or PB5 (Y). */
 void mac128k_set_mouse_phase(mac128k *machine, uint8_t x_phase, uint8_t y_phase);
+
+/* Enables device observations for the inclusive cycle range and clears old rows. */
+bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_t last_cycle);
+
+/* Returns the retained prefix and counts discarded rows after the cap. */
+const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine,
+                                                        size_t *count, uint64_t *dropped);
 
 /* Queues a guest M0110 key transition without touching host input. */
 bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed);

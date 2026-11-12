@@ -35,6 +35,8 @@ uint64_t mac_mouse_trace_stop_cycle(const mac_mouse_trace *trace);
 size_t mac_mouse_trace_count(const mac_mouse_trace *trace);
 const mac_mouse_sample *mac_mouse_trace_samples(const mac_mouse_trace *trace);
 bool mac_mouse_trace_append(mac_mouse_trace *trace, mac_mouse_sample sample);
+/* Undo a successful append if its input sample could not be queued. */
+void mac_mouse_trace_pop(mac_mouse_trace *trace);
 
 /* Buffer remains valid until this trace is serialized again or destroyed. */
 const uint8_t *mac_mouse_trace_serialize(mac_mouse_trace *trace, uint64_t stop_cycle, size_t *size);

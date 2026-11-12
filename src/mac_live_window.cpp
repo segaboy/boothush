@@ -46,12 +46,6 @@ constexpr BitmapInfo bitmap = {
     {{255, 255, 255, 0}, {0, 0, 0, 0}},
 };
 
-int floor_divide(int value, int divisor)
-{
-    const int whole = value / divisor;
-    return whole - (value % divisor < 0 ? 1 : 0);
-}
-
 RECT outer_size(unsigned scale, UINT dpi)
 {
     RECT rect{0, 0, frame_width * static_cast<LONG>(scale), frame_height * static_cast<LONG>(scale)};
@@ -92,6 +86,7 @@ struct mac_live_window {
     }
 
     bool accepts_input() const { return active || !visible; }
+    bool captured() const { return pressed && (!visible || GetCapture() == hwnd); }
 
     void change_button(bool down)
     {
@@ -121,7 +116,10 @@ struct mac_live_window {
     bool pointer_position(LPARAM coordinates, bool allow_captured)
     {
         RECT client{};
-        GetClientRect(hwnd, &client);
+        if (!GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0) {
+            anchored = false;
+            return false;
+        }
         const auto view = viewport(client);
         const int x = GET_X_LPARAM(coordinates);
         const int y = GET_Y_LPARAM(coordinates);
@@ -135,8 +133,10 @@ struct mac_live_window {
             return false;
         }
 
-        const int next_x = floor_divide(x - view.left, view.scale);
-        const int next_y = floor_divide(y - view.top, view.scale);
+        // Keep captured drag coordinates at the nearest visible viewport pixel.
+        // The first in-bounds reversal should not have to unwind off-window motion.
+        const int next_x = (std::clamp(x, view.left, view.right() - 1) - view.left) / view.scale;
+        const int next_y = (std::clamp(y, view.top, view.bottom() - 1) - view.top) / view.scale;
         if (anchored && (next_x != guest_x || next_y != guest_y)) {
             enqueue({next_x - guest_x, next_y - guest_y, false, pressed});
         }
@@ -189,6 +189,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     }
 
     switch (message) {
+    case WM_MOUSEACTIVATE:
+        if (window->visible && !window->active && LOWORD(lparam) == HTCLIENT) {
+            // The activation click has no guest cursor anchor yet.
+            return MA_ACTIVATEANDEAT;
+        }
+        break;
     case WM_ACTIVATE:
         window->active = LOWORD(wparam) != WA_INACTIVE && HIWORD(wparam) == 0;
         if (!window->active) {
@@ -209,7 +215,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             if (window->pressed && (wparam & MK_LBUTTON) == 0) {
                 window->abandon_input(true);
             }
-            window->pointer_position(lparam, window->pressed && GetCapture() == hwnd);
+            window->pointer_position(lparam, window->captured());
         }
         return 0;
     case WM_LBUTTONDOWN:
@@ -225,7 +231,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     case WM_LBUTTONUP:
         if (window->pressed) {
-            window->pointer_position(lparam, GetCapture() == hwnd);
+            window->pointer_position(lparam, window->captured());
             window->change_button(false);
             if (GetCapture() == hwnd) {
                 ReleaseCapture();

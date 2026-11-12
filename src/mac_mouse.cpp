@@ -45,47 +45,48 @@ MacMouse::MacMouse(uint32_t edge_cycles, uint8_t dcd_invert, uint32_t vbl_guard_
 
 bool MacMouse::queue_motion(uint64_t cycle, int32_t dx, int32_t dy)
 {
-    const uint32_t x = magnitude(dx);
-    const uint32_t y = magnitude(dy);
-    const uint32_t span = std::max(x, y);
-    if (span > transition_capacity / 2) {
-        return false;
-    }
-    // Forward Gray order moves left and down without guest DCD inversion.
-    const uint8_t x_turn = (dx < 0) != ((dcd_invert_ & 1) != 0) ? 1 : 3;
-    const uint8_t y_turn = (dy > 0) != ((dcd_invert_ & 2) != 0) ? 1 : 3;
-    return append({cycle, x, y, span, span * 2, x_turn, y_turn, false});
+    return queue_sample(cycle, dx, dy, false, false);
 }
 
 bool MacMouse::queue_button(uint64_t cycle, bool pressed)
 {
-    Event event{};
-    event.cycle = cycle;
-    event.transitions = pressed != queued_pressed_ ? 1 : 0;
-    event.pressed = pressed;
-    if (!append(event)) {
+    return queue_sample(cycle, 0, 0, true, pressed);
+}
+
+bool MacMouse::queue_sample(uint64_t cycle, int32_t dx, int32_t dy, bool button_changed, bool pressed)
+{
+    const uint32_t x = magnitude(dx);
+    const uint32_t y = magnitude(dy);
+    const uint32_t span = std::max(x, y);
+    if (span > transition_capacity / 2 || cycle < last_input_cycle_) {
         return false;
     }
-    queued_pressed_ = pressed;
+    const bool button_edge = button_changed && pressed != queued_pressed_;
+    const uint32_t transitions = span * 2 + button_edge;
+    const size_t commands = static_cast<size_t>(span != 0) + button_edge;
+    if (commands != 0 && (!ready_cycle_ || !after_vbl_guard(std::max(cycle, *ready_cycle_)) ||
+        commands > queue_capacity - size_ || transitions > transition_capacity - pending_transitions_)) {
+        return false;
+    }
+    if (span != 0) {
+        // Forward Gray order moves left and down without guest DCD inversion.
+        const uint8_t x_turn = (dx < 0) != ((dcd_invert_ & 1) != 0) ? 1 : 3;
+        const uint8_t y_turn = (dy > 0) != ((dcd_invert_ & 2) != 0) ? 1 : 3;
+        append({cycle, x, y, span, span * 2, x_turn, y_turn, false});
+    }
+    if (button_edge) {
+        append({cycle, 0, 0, 0, 1, 0, 0, pressed});
+        queued_pressed_ = pressed;
+    }
+    last_input_cycle_ = cycle;
     return true;
 }
 
-bool MacMouse::append(Event event)
+void MacMouse::append(Event event)
 {
-    if (event.cycle < last_input_cycle_) {
-        return false;
-    }
-    if (event.transitions != 0) {
-        if (!ready_cycle_ || !after_vbl_guard(std::max(event.cycle, *ready_cycle_)) ||
-            size_ == queue_capacity || event.transitions > transition_capacity - pending_transitions_) {
-            return false;
-        }
-        queue_[(head_ + size_) % queue_capacity] = event;
-        ++size_;
-        pending_transitions_ += event.transitions;
-    }
-    last_input_cycle_ = event.cycle;
-    return true;
+    queue_[(head_ + size_) % queue_capacity] = event;
+    ++size_;
+    pending_transitions_ += event.transitions;
 }
 
 std::optional<uint64_t> MacMouse::next_cycle() const
@@ -172,6 +173,12 @@ bool mac_mouse_queue_motion(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_
 bool mac_mouse_queue_button(mac_mouse *mouse, uint64_t cycle, bool pressed)
 {
     return mouse->mouse.queue_button(cycle, pressed);
+}
+
+bool mac_mouse_queue_sample(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_t dy,
+                            bool button_changed, bool pressed)
+{
+    return mouse->mouse.queue_sample(cycle, dx, dy, button_changed, pressed);
 }
 
 bool mac_mouse_next_cycle(const mac_mouse *mouse, uint64_t *cycle)

@@ -28,6 +28,7 @@ public:
     // intact. A zero delta or an unchanged queued button state adds no work.
     bool queue_motion(uint64_t cycle, int32_t dx, int32_t dy);
     bool queue_button(uint64_t cycle, bool pressed);
+    bool queue_sample(uint64_t cycle, int32_t dx, int32_t dy, bool button_changed, bool pressed);
 
     // A queued vector uses two Gray edges per unit of its longer axis. Button
     // changes each take one transition and stay separate from motion vectors.
@@ -47,7 +48,7 @@ private:
         bool pressed = false;
     };
 
-    bool append(Event event);
+    void append(Event event);
     std::optional<uint64_t> after_vbl_guard(uint64_t cycle) const;
 
     std::array<Event, queue_capacity> queue_{};

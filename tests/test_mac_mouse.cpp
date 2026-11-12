@@ -208,6 +208,33 @@ void test_c_api()
     mac_mouse_destroy(mouse);
 }
 
+void test_atomic_combined_sample()
+{
+    mac_mouse *mouse = mac_mouse_create_timed(1, 0, 0);
+    require(mouse != nullptr, "combined-sample mouse allocation failed");
+    for (size_t i = 0; i + 1 < MacMouse::queue_capacity; ++i) {
+        require(mac_mouse_queue_motion(mouse, 10, 1, 0), "could not fill combined-sample test queue");
+    }
+    const auto before = mac_mouse_pending(mouse);
+    require(!mac_mouse_queue_sample(mouse, 20, 1, -1, true, true),
+            "motion and button exceeded the available queue slot");
+    require(mac_mouse_pending(mouse) == before, "refused combined sample partially modified the queue");
+    require(mac_mouse_queue_button(mouse, 10, true), "refusal changed the queued timestamp or button state");
+    require(mac_mouse_pending(mouse) == before + 1, "single available slot did not take the button");
+    mac_mouse_destroy(mouse);
+
+    MacMouse ordered(1, 0, 0);
+    require(ordered.queue_sample(10, 1, -1, true, true), "combined sample rejected with adequate space");
+    GuestPointer pointer;
+    for (int edge = 0; edge < 2; ++edge) {
+        pointer.observe(run_edge(ordered), 0);
+        require(!pointer.pins.pressed, "combined sample pressed before moving");
+    }
+    pointer.observe(run_edge(ordered), 0);
+    require(pointer.x == 1 && pointer.y == -1 && pointer.pins.pressed,
+            "combined sample did not deliver motion followed by press");
+}
+
 } // namespace
 
 int main()
@@ -217,4 +244,5 @@ int main()
     test_late_delivery_and_bounds();
     test_vbl_guard();
     test_c_api();
+    test_atomic_combined_sample();
 }

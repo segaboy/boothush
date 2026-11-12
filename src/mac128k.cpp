@@ -144,6 +144,12 @@ struct mac128k {
     uint64_t next_vbl_cycle = cycles_per_vbl;
     uint32_t fault_address = 0;
     const char *fault_operation = nullptr;
+    uint8_t irq_level = 0;
+    std::unique_ptr<mac128k_mouse_witness_event[]> witness;
+    uint64_t witness_first = 0;
+    uint64_t witness_last = 0;
+    uint64_t witness_dropped = 0;
+    size_t witness_count = 0;
     boothush::Iwm iwm{};
     MacKeyboard keyboard{};
     MacRtc rtc{};
@@ -163,13 +169,44 @@ struct mac128k {
     {
         const uint8_t via_irq = (interrupt_flags & interrupt_enable) != 0 ? 1 : 0;
         const uint8_t scc_irq = scc_irq_enabled && scc_pending() != 0 ? 2 : 0;
-        cpu.setIPL(via_irq | scc_irq);
+        const uint8_t next_irq = via_irq | scc_irq;
+        cpu.setIPL(next_irq);
+        if (next_irq != irq_level) {
+            irq_level = next_irq;
+            if (witness) {
+                observe(MAC128K_WITNESS_IRQ, static_cast<uint64_t>(cpu.getClock()), 0, 0, irq_level);
+            }
+        }
     }
 
     uint8_t scc_pending() const
     {
         return (scc[scc_channel_a].irq_pending() ? scc_ext_pending_a : 0) |
                (scc[scc_channel_b].irq_pending() ? scc_ext_pending_b : 0);
+    }
+
+    uint8_t via_ifr() const
+    {
+        return interrupt_flags | ((interrupt_flags & interrupt_enable) != 0 ? via_irq_bit : 0);
+    }
+
+    void observe(mac128k_mouse_witness_kind kind, uint64_t cycle, uint32_t address = 0,
+                 uint8_t reg = 0, uint8_t value = 0)
+    {
+        if (cycle < witness_first || cycle > witness_last) {
+            return;
+        }
+        if (witness_count == MAC128K_MOUSE_WITNESS_CAPACITY) {
+            ++witness_dropped;
+            return;
+        }
+        const auto &x = scc[scc_channel_a];
+        const auto &y = scc[scc_channel_b];
+        const uint8_t latched = x.dcd_latched | (y.dcd_latched << 1);
+        const uint8_t dcd = x.dcd_status() | (y.dcd_status() << 1);
+        witness[witness_count++] = {cycle, address, static_cast<uint8_t>(kind), reg, value,
+                                    x.phase, y.phase, mouse_pressed, scc_pending(), latched,
+                                    dcd, via_ifr(), interrupt_enable, irq_level};
     }
 
     unsigned ca2_mode() const
@@ -186,6 +223,9 @@ struct mac128k {
 
     void tick(uint64_t cycle)
     {
+        if (witness && witness_count == 0) {
+            observe(MAC128K_WITNESS_SNAPSHOT, cycle);
+        }
         if (cycle >= next_vbl_cycle) {
             const uint64_t elapsed = (cycle - next_vbl_cycle) / cycles_per_vbl + 1;
             vbl += elapsed;
@@ -297,7 +337,7 @@ struct mac128k {
         case 12:
             return peripheral_control;
         case 13:
-            return interrupt_flags | ((interrupt_flags & interrupt_enable) != 0 ? via_irq_bit : 0);
+            return via_ifr();
         case 14:
             return interrupt_enable | via_irq_bit;
         case 15:
@@ -453,12 +493,22 @@ struct mac128k {
             return size == 1 ? value : (uint32_t{value} << 8) | value;
         }
         if (size == 1 && (address == scc_read_a || address == scc_read_b)) {
-            return read_scc(address);
+            const uint8_t reg = scc_pointer;
+            const uint8_t value = read_scc(address);
+            if (witness) {
+                observe(MAC128K_WITNESS_SCC_READ, static_cast<uint64_t>(cpu.getClock()), address, reg, value);
+            }
+            return value;
         }
         const uint32_t via_offset = address - via_base;
         if (size == 1 && via_offset < via_register_count * via_register_stride &&
             via_offset % via_register_stride == 0) {
-            return read_via(via_offset / via_register_stride, address);
+            const uint8_t reg = static_cast<uint8_t>(via_offset / via_register_stride);
+            const uint8_t value = read_via(reg, address);
+            if (witness && (reg <= 3 || reg >= 11)) {
+                observe(MAC128K_WITNESS_VIA_READ, static_cast<uint64_t>(cpu.getClock()), address, reg, value);
+            }
+            return value;
         }
         if (const uint8_t *bytes = readable_memory(address, size)) {
             uint32_t value = 0;
@@ -477,14 +527,24 @@ struct mac128k {
             return;
         }
         if (size == 1 && (address == scc_write_a || address == scc_write_b)) {
+            const uint8_t reg = scc_pointer;
             write_scc(address, static_cast<uint8_t>(value));
             update_irq();
+            if (witness) {
+                observe(MAC128K_WITNESS_SCC_WRITE, static_cast<uint64_t>(cpu.getClock()), address, reg,
+                        static_cast<uint8_t>(value));
+            }
             return;
         }
         const uint32_t via_offset = address - via_base;
         if (size == 1 && via_offset < via_register_count * via_register_stride &&
             via_offset % via_register_stride == 0) {
-            write_via(via_offset / via_register_stride, address, static_cast<uint8_t>(value));
+            const uint8_t reg = static_cast<uint8_t>(via_offset / via_register_stride);
+            write_via(reg, address, static_cast<uint8_t>(value));
+            if (witness && (reg <= 3 || reg >= 11)) {
+                observe(MAC128K_WITNESS_VIA_WRITE, static_cast<uint64_t>(cpu.getClock()), address, reg,
+                        static_cast<uint8_t>(value));
+            }
             return;
         }
         if (uint8_t *bytes = writable_memory(address, size)) {
@@ -598,14 +658,52 @@ mac128k_state mac128k_get_state(const mac128k *machine)
 
 void mac128k_set_mouse_button(mac128k *machine, bool pressed)
 {
+    if (machine->mouse_pressed == pressed) {
+        return;
+    }
     machine->mouse_pressed = pressed;
+    if (machine->witness) {
+        machine->observe(MAC128K_WITNESS_BUTTON, static_cast<uint64_t>(machine->cpu.getClock()),
+                         0, 0, pressed);
+    }
 }
 
 void mac128k_set_mouse_phase(mac128k *machine, uint8_t x_phase, uint8_t y_phase)
 {
+    const bool changed = machine->scc[scc_channel_a].phase != x_phase ||
+                         machine->scc[scc_channel_b].phase != y_phase;
     machine->scc[scc_channel_a].set_phase(x_phase);
     machine->scc[scc_channel_b].set_phase(y_phase);
     machine->update_irq();
+    if (changed && machine->witness) {
+        machine->observe(MAC128K_WITNESS_PHASE, static_cast<uint64_t>(machine->cpu.getClock()));
+    }
+}
+
+bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_t last_cycle)
+{
+    if (first_cycle > last_cycle) {
+        return false;
+    }
+    if (!machine->witness) {
+        machine->witness.reset(new (std::nothrow) mac128k_mouse_witness_event[MAC128K_MOUSE_WITNESS_CAPACITY]);
+        if (!machine->witness) {
+            return false;
+        }
+    }
+    machine->witness_first = first_cycle;
+    machine->witness_last = last_cycle;
+    machine->witness_count = 0;
+    machine->witness_dropped = 0;
+    machine->observe(MAC128K_WITNESS_SNAPSHOT, static_cast<uint64_t>(machine->cpu.getClock()));
+    return true;
+}
+
+const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine, size_t *count, uint64_t *dropped)
+{
+    *count = machine->witness_count;
+    *dropped = machine->witness_dropped;
+    return machine->witness.get();
 }
 
 bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed)

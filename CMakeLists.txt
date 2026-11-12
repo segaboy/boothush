@@ -58,8 +58,17 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(boothush_mac_live_cli_test src/main.c src/pc286.cpp tests/mac_live_cli_window.cpp)
+    target_compile_features(boothush_mac_live_cli_test PRIVATE c_std_11 cxx_std_20)
+    target_compile_definitions(boothush_mac_live_cli_test PRIVATE
+        "$<$<COMPILE_LANGUAGE:C>:mac_live_window_create=boothush_test_window_create>")
+    target_link_libraries(boothush_mac_live_cli_test PRIVATE boothush_mac i286)
+    if(MINGW)
+        target_link_options(boothush_mac_live_cli_test PRIVATE -municode -static)
+    endif()
     add_test(NAME boothush COMMAND
         "${CMAKE_COMMAND}" -E env "BOOTHUSH_EXE=$<TARGET_FILE:boothush>"
+        "BOOTHUSH_LIVE_CLI_TEST_EXE=$<TARGET_FILE:boothush_mac_live_cli_test>"
         "BOOTHUSH_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}"
         "${Python3_EXECUTABLE}" -B -m unittest discover -v -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     )

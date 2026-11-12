@@ -29,6 +29,9 @@ mac_mouse *mac_mouse_create_timed(uint32_t edge_cycles, uint8_t dcd_invert, uint
 void mac_mouse_destroy(mac_mouse *mouse);
 bool mac_mouse_queue_motion(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_t dy);
 bool mac_mouse_queue_button(mac_mouse *mouse, uint64_t cycle, bool pressed);
+/* Enqueues motion followed by the button change, or leaves the queue intact. */
+bool mac_mouse_queue_sample(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_t dy,
+                            bool button_changed, bool pressed);
 bool mac_mouse_next_cycle(const mac_mouse *mouse, uint64_t *cycle);
 bool mac_mouse_advance(mac_mouse *mouse, uint64_t cycle, mac_mouse_state *state);
 uint32_t mac_mouse_pending(const mac_mouse *mouse);

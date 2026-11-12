@@ -161,6 +161,11 @@ bool mac_mouse_trace_append(mac_mouse_trace *trace, mac_mouse_sample sample)
     }
 }
 
+void mac_mouse_trace_pop(mac_mouse_trace *trace)
+{
+    trace->samples.pop_back();
+}
+
 const uint8_t *mac_mouse_trace_serialize(mac_mouse_trace *trace, uint64_t stop_cycle, size_t *size)
 {
     if (!trace->samples.empty() && stop_cycle < trace->samples.back().cycle) {
