@@ -9,6 +9,9 @@
 #include <wchar.h>
 
 #include "mac128k.h"
+#include "mac_live_window.h"
+#include "mac_mouse_api.h"
+#include "mac_mouse_trace.h"
 #include "pc286.h"
 
 enum {
@@ -17,6 +20,8 @@ enum {
     MAX_CYCLES = 1000000000,
     MAX_TIMEOUT_MS = 60000,
     CYCLE_SLICE = 256,
+    MAC_CLOCK_HZ = 7833600,
+    LIVE_PUMP_INTERVAL_MS = 2,
 };
 
 struct predicate {
@@ -30,13 +35,13 @@ struct inspection {
     uint32_t length;
 };
 
-enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MAC_KEY, INPUT_PC_SCAN };
+enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MOTION, INPUT_MAC_KEY, INPUT_PC_SCAN };
 
 struct input_event {
     uint32_t cycle;
     enum input_kind kind;
-    uint8_t first;
-    uint8_t second;
+    int32_t first;
+    int32_t second;
 };
 
 enum machine_kind { MACHINE_UNSET, MACHINE_MAC128K, MACHINE_PC286 };
@@ -50,6 +55,8 @@ struct request {
     const wchar_t *ega_rom_path;
     const wchar_t *frame_path;
     const wchar_t *cancel_event;
+    const wchar_t *mouse_record_path;
+    const wchar_t *mouse_replay_path;
     uint32_t cycle_limit;
     uint32_t timeout_ms;
     struct predicate until;
@@ -58,6 +65,14 @@ struct request {
     uint32_t target_pc;
     bool stop_at_post;
     uint32_t target_post;
+    uint32_t live_scale;
+    uint32_t mouse_edge_cycles;
+    uint32_t mouse_vbl_guard;
+    uint8_t mouse_dcd_invert;
+    bool mouse_invert_set;
+    bool mouse_guard_set;
+    bool raw_mouse_phases;
+    bool relative_motion;
     struct input_event input_events[MAX_INPUT_EVENTS];
     size_t input_event_count;
 };
@@ -70,6 +85,16 @@ struct image {
 struct machine {
     mac128k *mac;
     pc286 *pc;
+};
+
+struct mouse_session {
+    mac_mouse *bridge;
+    mac_live_window *window;
+    mac_mouse_trace *record;
+    mac_mouse_trace *replay;
+    size_t replay_index;
+    uint64_t accepted;
+    uint64_t emitted;
 };
 
 struct machine_state {
@@ -149,39 +174,73 @@ static bool parse_fields(const wchar_t *text, uint32_t *fields, size_t count)
     return *text == '\0';
 }
 
+static bool parse_delta(const wchar_t **text, int32_t *delta)
+{
+    const bool negative = **text == L'-';
+    if (negative) {
+        ++*text;
+    }
+    uint32_t magnitude;
+    if (!parse_number(text, &magnitude) || magnitude > (uint32_t)INT32_MAX + negative) {
+        return false;
+    }
+    *delta = negative ? (int32_t)-(int64_t)magnitude : (int32_t)magnitude;
+    return true;
+}
+
 static bool add_input_event(struct request *request, enum input_kind kind, const wchar_t *value)
 {
     const size_t count = request->input_event_count;
-    const bool two_arguments = kind == INPUT_PHASE || kind == INPUT_MAC_KEY;
-    uint32_t fields[3] = {0};
-    if (count == MAX_INPUT_EVENTS || !parse_fields(value, fields, two_arguments ? 3 : 2) ||
-        (count != 0 && fields[0] < request->input_events[count - 1].cycle)) {
+    if (count == MAX_INPUT_EVENTS) {
         return false;
     }
-    switch (kind) {
-    case INPUT_BUTTON:
-        if (fields[1] > 1) {
+    struct input_event event = {.kind = kind};
+    if (kind == INPUT_MOTION) {
+        if (!parse_number(&value, &event.cycle) || *value++ != L':' ||
+            !parse_delta(&value, &event.first) || *value++ != L':' ||
+            !parse_delta(&value, &event.second) || *value != L'\0') {
             return false;
         }
-        break;
-    case INPUT_PHASE:
-        if (fields[1] > 3 || fields[2] > 3) {
+    } else {
+        const bool two_arguments = kind == INPUT_PHASE || kind == INPUT_MAC_KEY;
+        uint32_t fields[3] = {0};
+        if (!parse_fields(value, fields, two_arguments ? 3 : 2)) {
             return false;
         }
-        break;
-    case INPUT_MAC_KEY:
-        if (fields[1] > MAC128K_MAX_KEY_CODE || fields[2] > 1) {
+        switch (kind) {
+        case INPUT_BUTTON:
+            if (fields[1] > 1) {
+                return false;
+            }
+            break;
+        case INPUT_PHASE:
+            if (fields[1] > 3 || fields[2] > 3) {
+                return false;
+            }
+            break;
+        case INPUT_MAC_KEY:
+            if (fields[1] > MAC128K_MAX_KEY_CODE || fields[2] > 1) {
+                return false;
+            }
+            break;
+        case INPUT_PC_SCAN:
+            if (fields[1] > 0xff) {
+                return false;
+            }
+            break;
+        case INPUT_MOTION:
             return false;
         }
-        break;
-    case INPUT_PC_SCAN:
-        if (fields[1] > 0xff) {
-            return false;
-        }
-        break;
+        event.cycle = fields[0];
+        event.first = (int32_t)fields[1];
+        event.second = (int32_t)fields[2];
     }
-    request->input_events[count] = (struct input_event){
-        fields[0], kind, (uint8_t)fields[1], (uint8_t)fields[2]};
+    if (count != 0 && event.cycle < request->input_events[count - 1].cycle) {
+        return false;
+    }
+    request->raw_mouse_phases |= kind == INPUT_PHASE;
+    request->relative_motion |= kind == INPUT_MOTION;
+    request->input_events[count] = event;
     ++request->input_event_count;
     return true;
 }
@@ -222,6 +281,32 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->frame_path = value;
         } else if (wcscmp(option, L"--cancel-event") == 0 && request->cancel_event == NULL) {
             request->cancel_event = value;
+        } else if (wcscmp(option, L"--live") == 0 && request->live_scale == 0) {
+            if (!parse_fields(value, fields, 1) || fields[0] < 1 || fields[0] > 4) {
+                return "live requires a window scale from 1 to 4";
+            }
+            request->live_scale = fields[0];
+        } else if (wcscmp(option, L"--mouse-record") == 0 && request->mouse_record_path == NULL) {
+            request->mouse_record_path = value;
+        } else if (wcscmp(option, L"--mouse-replay") == 0 && request->mouse_replay_path == NULL) {
+            request->mouse_replay_path = value;
+        } else if (wcscmp(option, L"--mouse-edge-cycles") == 0 && request->mouse_edge_cycles == 0) {
+            if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > 1000000) {
+                return "mouse-edge-cycles must be between 1 and 1000000";
+            }
+            request->mouse_edge_cycles = fields[0];
+        } else if (wcscmp(option, L"--mouse-dcd-invert") == 0 && !request->mouse_invert_set) {
+            if (!parse_fields(value, fields, 1) || fields[0] > 3) {
+                return "mouse-dcd-invert requires a two-bit mask";
+            }
+            request->mouse_invert_set = true;
+            request->mouse_dcd_invert = (uint8_t)fields[0];
+        } else if (wcscmp(option, L"--mouse-vbl-guard") == 0 && !request->mouse_guard_set) {
+            if (!parse_fields(value, fields, 1) || fields[0] > MAC_MOUSE_MAX_VBL_GUARD_CYCLES) {
+                return "mouse-vbl-guard must be between 0 and 8192";
+            }
+            request->mouse_guard_set = true;
+            request->mouse_vbl_guard = fields[0];
         } else if (wcscmp(option, L"--mouse-button") == 0) {
             if (!add_input_event(request, INPUT_BUTTON, value)) {
                 return "invalid mouse-button cycle:state event or input order";
@@ -229,6 +314,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mouse-phase") == 0) {
             if (!add_input_event(request, INPUT_PHASE, value)) {
                 return "invalid mouse-phase cycle:x:y event or input order";
+            }
+        } else if (wcscmp(option, L"--mouse-motion") == 0) {
+            if (!add_input_event(request, INPUT_MOTION, value)) {
+                return "invalid mouse-motion cycle:dx:dy event or input order";
             }
         } else if (wcscmp(option, L"--key") == 0) {
             if (!add_input_event(request, INPUT_MAC_KEY, value)) {
@@ -289,6 +378,26 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->input_events[request->input_event_count - 1].cycle >= request->cycle_limit) {
         return "input events must precede the cycle limit";
     }
+    const bool mouse_bridge = request->live_scale || request->relative_motion || request->mouse_replay_path;
+    const bool mouse_settings = request->mouse_edge_cycles || request->mouse_invert_set ||
+                                request->mouse_guard_set;
+    if (request->machine != MACHINE_MAC128K &&
+        (mouse_bridge || request->mouse_record_path || mouse_settings)) {
+        return "live window, mouse recording, replay and motion settings require mac128k";
+    }
+    if (request->raw_mouse_phases && mouse_bridge) {
+        return "raw mouse phases cannot be mixed with relative motion, replay or live input";
+    }
+    if (request->mouse_record_path != NULL && request->live_scale == 0) {
+        return "mouse-record requires live input";
+    }
+    if (request->mouse_replay_path != NULL &&
+        (request->live_scale || mouse_settings)) {
+        return "mouse-replay supplies its own input events and mouse settings";
+    }
+    if (!mouse_bridge && mouse_settings) {
+        return "mouse settings require live input or relative motion";
+    }
     if (request->machine == MACHINE_MAC128K) {
         if (request->rom_path == NULL) {
             return "mac128k requires a ROM";
@@ -308,8 +417,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         }
     }
     for (size_t index = 0; index < request->input_event_count; ++index) {
-        if ((request->input_events[index].kind == INPUT_PC_SCAN) != (request->machine == MACHINE_PC286)) {
+        const enum input_kind kind = request->input_events[index].kind;
+        if ((kind == INPUT_PC_SCAN) != (request->machine == MACHINE_PC286)) {
             return "use scancode for pc286 and key or mouse events for mac128k";
+        }
+        if ((request->live_scale || request->mouse_replay_path) && kind != INPUT_MAC_KEY) {
+            return "live input and replay cannot be mixed with scheduled mouse events";
         }
     }
     const uint32_t ram_size = request->machine == MACHINE_MAC128K ? MAC128K_RAM_SIZE : PC286_VIDEO_END;
@@ -374,6 +487,73 @@ static bool write_new_file(const wchar_t *path, const char *header, DWORD header
     return success;
 }
 
+static const char *open_mouse_session(struct mouse_session *mouse, const struct request *request)
+{
+    if (!request->live_scale && !request->relative_motion && !request->mouse_replay_path) {
+        return NULL;
+    }
+    uint32_t edge_cycles = request->mouse_edge_cycles ? request->mouse_edge_cycles
+                                                     : MAC_MOUSE_DEFAULT_EDGE_CYCLES;
+    uint32_t vbl_guard = request->mouse_guard_set ? request->mouse_vbl_guard
+                                                 : MAC_MOUSE_DEFAULT_VBL_GUARD_CYCLES;
+    uint8_t invert = request->mouse_dcd_invert;
+    if (request->mouse_replay_path != NULL) {
+        struct image trace = {0};
+        const char *error = read_image(request->mouse_replay_path, &trace, 1,
+                                       MAC_MOUSE_TRACE_MAX_BYTES, "invalid mouse trace size");
+        if (error == NULL) {
+            mouse->replay = mac_mouse_trace_parse(trace.bytes, trace.size);
+        }
+        free(trace.bytes);
+        if (mouse->replay == NULL) {
+            return "cannot read a valid BHMOUSE1 mouse trace";
+        }
+        edge_cycles = mac_mouse_trace_edge_cycles(mouse->replay);
+        invert = mac_mouse_trace_dcd_invert(mouse->replay);
+        vbl_guard = mac_mouse_trace_vbl_guard_cycles(mouse->replay);
+    }
+    mouse->bridge = mac_mouse_create_timed(edge_cycles, invert, vbl_guard);
+    if (mouse->bridge == NULL) {
+        return "cannot initialize the mouse bridge";
+    }
+    if (request->mouse_record_path != NULL) {
+        mouse->record = mac_mouse_trace_create(edge_cycles, invert, vbl_guard);
+        if (mouse->record == NULL) {
+            return "cannot initialize the mouse trace";
+        }
+    }
+    if (request->live_scale) {
+        mouse->window = mac_live_window_create(request->live_scale, true);
+        if (mouse->window == NULL) {
+            return "cannot create the live Mac window";
+        }
+    }
+    return NULL;
+}
+
+static void close_mouse_session(struct mouse_session *mouse)
+{
+    if (mouse->window != NULL) {
+        mac_live_window_destroy(mouse->window);
+    }
+    mac_mouse_trace_destroy(mouse->record);
+    mac_mouse_trace_destroy(mouse->replay);
+    mac_mouse_destroy(mouse->bridge);
+}
+
+static bool queue_mouse_sample(struct mouse_session *mouse, mac_mouse_sample sample)
+{
+    if (((sample.dx || sample.dy) &&
+         !mac_mouse_queue_motion(mouse->bridge, sample.cycle, sample.dx, sample.dy)) ||
+        (sample.button_changed &&
+         !mac_mouse_queue_button(mouse->bridge, sample.cycle, sample.pressed)) ||
+        (mouse->record != NULL && !mac_mouse_trace_append(mouse->record, sample))) {
+        return false;
+    }
+    ++mouse->accepted;
+    return true;
+}
+
 static bool read_ram(const struct machine *machine, uint32_t address, uint8_t *bytes, size_t size)
 {
     return machine->mac != NULL
@@ -414,7 +594,8 @@ static bool matches(const struct machine *machine, struct predicate until)
 
 static void print_result(const char *status, enum machine_kind machine,
                          struct machine_state state, const char *error,
-                         const uint8_t *bytes, struct inspection inspect)
+                         const uint8_t *bytes, struct inspection inspect,
+                         const struct mouse_session *mouse)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
@@ -437,6 +618,10 @@ static void print_result(const char *status, enum machine_kind machine,
         printf(",\"fault\":{\"operation\":\"%s\",\"address\":%" PRIu32 "}",
                state.fault_operation, state.fault_address);
     }
+    if (mouse != NULL && mouse->bridge != NULL) {
+        printf(",\"mouse\":{\"samples\":%" PRIu64 ",\"steps\":%" PRIu64 ",\"pending\":%" PRIu32 "}",
+               mouse->accepted, mouse->emitted, mac_mouse_pending(mouse->bridge));
+    }
     if (bytes != NULL && inspect.length != 0) {
         printf(",\"memory\":{\"address\":%" PRIu32 ",\"bytes\":\"", inspect.address);
         for (uint32_t index = 0; index < inspect.length; ++index) {
@@ -449,19 +634,28 @@ static void print_result(const char *status, enum machine_kind machine,
 
 static int request_error(const char *error)
 {
-    print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL, (struct inspection){0});
+    print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
+                 (struct inspection){0}, NULL);
     return 2;
 }
 
-static bool apply_input(struct machine *machine, struct input_event event)
+static bool apply_input(struct machine *machine, struct mouse_session *mouse,
+                        struct input_event event, uint64_t cycle)
 {
     switch (event.kind) {
     case INPUT_BUTTON:
+        if (mouse->bridge != NULL) {
+            return queue_mouse_sample(mouse, (mac_mouse_sample){
+                .cycle = cycle, .button_changed = true, .pressed = event.first != 0});
+        }
         mac128k_set_mouse_button(machine->mac, event.first != 0);
         return true;
     case INPUT_PHASE:
         mac128k_set_mouse_phase(machine->mac, event.first, event.second);
         return true;
+    case INPUT_MOTION:
+        return queue_mouse_sample(mouse, (mac_mouse_sample){
+            .cycle = cycle, .dx = event.first, .dy = event.second});
     case INPUT_MAC_KEY:
         return mac128k_inject_key(machine->mac, event.first, event.second != 0);
     case INPUT_PC_SCAN:
@@ -476,20 +670,56 @@ struct run_result {
     int exit_code;
 };
 
+static mac_live_status refresh_live(struct machine *machine, struct mouse_session *mouse,
+                                    struct machine_state state, uint64_t *presented_vbl)
+{
+    const mac_live_status status = mac_live_window_pump(mouse->window);
+    if (status != MAC_LIVE_RUNNING) {
+        return status;
+    }
+    if (state.vbl != *presented_vbl) {
+        mac_live_window_present(mouse->window, mac128k_frame(machine->mac));
+        *presented_vbl = state.vbl;
+    }
+    mac_live_event event;
+    while (mac_live_window_next_event(mouse->window, &event)) {
+        if (!queue_mouse_sample(mouse, (mac_mouse_sample){
+            state.cycles, event.dx, event.dy, event.button_changed, event.pressed})) {
+            return MAC_LIVE_INPUT_OVERFLOW;
+        }
+    }
+    return MAC_LIVE_RUNNING;
+}
+
+static uint32_t slice_before(uint32_t slice, uint64_t cycle, uint64_t deadline)
+{
+    const uint64_t distance = deadline - cycle;
+    return distance < slice ? (uint32_t)distance : slice;
+}
+
 static struct run_result run_machine(struct machine *machine, const struct request *request,
-                                     HANDLE cancel_event)
+                                     struct mouse_session *mouse, HANDLE cancel_event)
 {
     LARGE_INTEGER frequency, start;
     if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&start)) {
         return (struct run_result){"error", "cannot start monotonic timer", 2};
     }
     const double timeout_ticks = (double)frequency.QuadPart * request->timeout_ms / 1000.0;
+    const LONGLONG pump_interval = frequency.QuadPart * LIVE_PUMP_INTERVAL_MS / 1000;
     const bool use_predicate = request->until.width != 0 || request->stop_at_pc || request->stop_at_post;
+    uint64_t cycle_limit = request->cycle_limit;
+    const size_t replay_count = mouse->replay ? mac_mouse_trace_count(mouse->replay) : 0;
+    const mac_mouse_sample *replay = mouse->replay ? mac_mouse_trace_samples(mouse->replay) : NULL;
+    if (mouse->replay != NULL && mac_mouse_trace_stop_cycle(mouse->replay) < cycle_limit) {
+        cycle_limit = mac_mouse_trace_stop_cycle(mouse->replay);
+    }
     if (machine->pc != NULL && request->input_event_count != 0) {
         pc286_expect_input(machine->pc, true);
     }
     struct machine_state state = get_state(machine);
     size_t next_event = 0;
+    LONGLONG next_pump = start.QuadPart;
+    uint64_t presented_vbl = UINT64_MAX;
 
     for (;;) {
         if (state.fault_operation != NULL) {
@@ -508,7 +738,8 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         if (!QueryPerformanceCounter(&now)) {
             return (struct run_result){"error", "cannot read monotonic timer", 2};
         }
-        if ((double)(now.QuadPart - start.QuadPart) >= timeout_ticks) {
+        const LONGLONG elapsed = now.QuadPart - start.QuadPart;
+        if ((double)elapsed >= timeout_ticks) {
             return (struct run_result){"timeout", NULL, 1};
         }
         if ((request->stop_at_pc && state.pc == request->target_pc) ||
@@ -519,13 +750,29 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         if (state.halted) {
             return (struct run_result){"halted", NULL, use_predicate ? 1 : 0};
         }
-        if (state.cycles >= request->cycle_limit) {
+        if (state.cycles >= cycle_limit) {
             return (struct run_result){"cycle_limit", NULL, use_predicate ? 1 : 0};
+        }
+
+        uint64_t live_target = cycle_limit;
+        if (mouse->window != NULL) {
+            live_target = (uint64_t)((double)elapsed * MAC_CLOCK_HZ / (double)frequency.QuadPart);
+            if (live_target <= state.cycles) {
+                const DWORD wait = MsgWaitForMultipleObjectsEx(0, NULL, 1, QS_ALLINPUT, 0);
+                if (wait == WAIT_FAILED) {
+                    return (struct run_result){"error", "cannot wait for live window input", 2};
+                }
+                continue;
+            }
         }
 
         while (next_event < request->input_event_count &&
                request->input_events[next_event].cycle <= state.cycles) {
-            if (!apply_input(machine, request->input_events[next_event])) {
+            const struct input_event event = request->input_events[next_event];
+            if (!apply_input(machine, mouse, event, state.cycles)) {
+                if (event.kind == INPUT_MOTION || event.kind == INPUT_BUTTON) {
+                    return (struct run_result){"input_overflow", "mouse bridge queue is full", 1};
+                }
                 return (struct run_result){"machine_fault", "guest keyboard rejected an input event", 1};
             }
             ++next_event;
@@ -534,18 +781,44 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             }
         }
 
-        const uint64_t previous_cycles = state.cycles;
-        uint32_t slice = (uint32_t)(request->cycle_limit - previous_cycles);
-        if (next_event < request->input_event_count) {
-            const uint32_t to_event = request->input_events[next_event].cycle - (uint32_t)previous_cycles;
-            if (to_event < slice) {
-                slice = to_event;
+        if (mouse->window != NULL && now.QuadPart >= next_pump) {
+            next_pump = now.QuadPart + pump_interval;
+            const mac_live_status status = refresh_live(machine, mouse, state, &presented_vbl);
+            if (status == MAC_LIVE_CLOSED) {
+                return (struct run_result){"closed", NULL, use_predicate ? 1 : 0};
+            }
+            if (status == MAC_LIVE_INPUT_OVERFLOW) {
+                return (struct run_result){"input_overflow", "live mouse input or recording queue is full", 1};
             }
         }
-        if (use_predicate) {
-            slice = 1;
-        } else if (slice > CYCLE_SLICE) {
-            slice = CYCLE_SLICE;
+
+        while (mouse->replay_index < replay_count && replay[mouse->replay_index].cycle <= state.cycles) {
+            if (!queue_mouse_sample(mouse, replay[mouse->replay_index])) {
+                return (struct run_result){"input_overflow", "mouse replay queue is full", 1};
+            }
+            ++mouse->replay_index;
+        }
+        uint64_t mouse_deadline = cycle_limit;
+        if (mouse->bridge != NULL) {
+            mac_mouse_state input;
+            if (mac_mouse_advance(mouse->bridge, state.cycles, &input)) {
+                mac128k_set_mouse_phase(machine->mac, input.x_phase, input.y_phase);
+                mac128k_set_mouse_button(machine->mac, input.pressed);
+                ++mouse->emitted;
+            }
+            mac_mouse_next_cycle(mouse->bridge, &mouse_deadline);
+        }
+
+        const uint64_t previous_cycles = state.cycles;
+        uint32_t slice = use_predicate ? 1 : CYCLE_SLICE;
+        slice = slice_before(slice, previous_cycles, cycle_limit);
+        slice = slice_before(slice, previous_cycles, live_target);
+        slice = slice_before(slice, previous_cycles, mouse_deadline);
+        if (next_event < request->input_event_count) {
+            slice = slice_before(slice, previous_cycles, request->input_events[next_event].cycle);
+        }
+        if (mouse->replay_index < replay_count) {
+            slice = slice_before(slice, previous_cycles, replay[mouse->replay_index].cycle);
         }
         if (machine->mac != NULL) {
             mac128k_run(machine->mac, slice);
@@ -657,8 +930,22 @@ int wmain(int argc, wchar_t **argv)
             return request_error("cannot open cancellation event");
         }
     }
+    struct mouse_session mouse = {0};
+    error = open_mouse_session(&mouse, &request);
+    if (error != NULL) {
+        close_mouse_session(&mouse);
+        if (cancel_event != NULL) {
+            CloseHandle(cancel_event);
+        }
+        destroy_machine(&machine);
+        return request_error(error);
+    }
     const BOOL console_handler = SetConsoleCtrlHandler(on_console_event, TRUE);
-    struct run_result result = run_machine(&machine, &request, cancel_event);
+    struct run_result result = run_machine(&machine, &request, &mouse, cancel_event);
+    if (mouse.window != NULL) {
+        mac_live_window_destroy(mouse.window);
+        mouse.window = NULL;
+    }
     if (cancel_event != NULL) {
         CloseHandle(cancel_event);
     }
@@ -682,7 +969,16 @@ int wmain(int argc, wchar_t **argv)
             result = (struct run_result){"error", "cannot create or write requested disk snapshot", 2};
         }
     }
-    print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect);
+    if (mouse.record != NULL) {
+        size_t size;
+        const uint8_t *data = mac_mouse_trace_serialize(mouse.record, state.cycles, &size);
+        if (data == NULL || !write_new_file(request.mouse_record_path, NULL, 0, data, (DWORD)size)) {
+            result = (struct run_result){"error", "cannot create or write requested mouse trace", 2};
+        }
+    }
+    print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect,
+                 &mouse);
+    close_mouse_session(&mouse);
     destroy_machine(&machine);
     if (console_handler) {
         SetConsoleCtrlHandler(on_console_event, FALSE);

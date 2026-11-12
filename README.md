@@ -1,6 +1,6 @@
 # BootHush
 
-BootHush is a headless Windows 11 emulator for fast, repeatable ClasSICK development tests. Each invocation loads local images, runs an isolated guest, returns one JSON result, and exits. Input and capture operate on guest devices.
+BootHush is a Windows 11 emulator for fast, repeatable ClasSICK development tests. Each invocation loads local images, runs an isolated guest, returns one JSON result, and exits. Runs are headless by default. The Mac profile also has an opt-in window for live mouse testing and recording.
 
 | Profile | Supported test path |
 | --- | --- |
@@ -24,6 +24,7 @@ Choose a writable build directory. To build the executable without Python, add `
 
 - Set `BOOTHUSH_CLASSICK_ROM` to the local 64 KiB startup fixture with SHA-256 `be506ad6e41d06ebcfe11678a4f6a64ba560920b16efa7fef884794f51690005` to verify the original ROM’s diagnostic words and framebuffer checksum.
 - Set `BOOTHUSH_CLASSICK_WINDOW_ROM` and `BOOTHUSH_CLASSICK_WINDOW_ROM_SHA256` for the short-collect invert-3 ClasSICK ROM with the CS09 and MWP1 v2 diagnostics. This exercises a scheduled press, release and four quadrature transitions, then checks guest motion and loss counters.
+- Set `BOOTHUSH_CLASSICK_LIVE_ROM` to the 2026-11-12 anchored ClasSICK candidate with SHA-256 `faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c`. The native mouse integration test sends messages to an invisible BootHush window and verifies the four corners, two title-bar drags, release, and a content click against the ROM's RAM diagnostics and framebuffer.
 - Set `BOOTHUSH_FREEDOS_FLOPPY` to `120m/x86BOOT.img` from the [official FreeDOS 1.4 Floppy Edition](https://www.freedos.org/download/). The test verifies the boot image SHA-256, selects a language with a scheduled Enter, and checks the installer prompt.
 
 ## Local process API
@@ -51,6 +52,13 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
 | `--mouse-button CYCLE:STATE` | Macintosh only. Schedule button state `1` pressed or `0` released. |
 | `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
+| `--mouse-motion CYCLE:DX:DY` | Macintosh only. Queue signed pixel deltas through the same paced quadrature bridge used for live input. Positive X is right and positive Y is down. Scheduled buttons join the same queue. |
+| `--live SCALE` | Macintosh only. Open a native mouse window at integer scale 1–4 and pace the guest to its nominal 7.8336 MHz clock. |
+| `--mouse-record PATH` | With `--live`, write the accepted mouse samples and their guest cycles to a new trace file. |
+| `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
+| `--mouse-edge-cycles N` | With `--live` or `--mouse-motion`, set the minimum interval between quadrature transitions in guest cycles. The default is 8,192. |
+| `--mouse-dcd-invert MASK` | With `--live` or `--mouse-motion`, flip direction for bit 0 (X) and bit 1 (Y). The default is `0`. The anchored ClasSICK candidate uses `3`. |
+| `--mouse-vbl-guard N` | With `--live` or `--mouse-motion`, leave `N` guest cycles on either side of each vertical blank before applying a transition. The default is 4,096. Use `0` to exercise unrestricted VBL timing. |
 | `--key CYCLE:CODE:STATE` | Macintosh only. Queue an M0110 scan position `0x00`–`0x39`, with `1` pressed and `0` released. |
 | `--scancode CYCLE:BYTE` | PC only. Queue one raw keyboard Set 2 byte. For a release, schedule `0xF0` and then the key byte. |
 | `--cancel-event NAME` | Open an existing Windows event by name. Signalling it stops a run cooperatively. Ctrl+C or Ctrl+Break can also stop a run in an attached console. |
@@ -61,9 +69,22 @@ The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. P
 
 | Exit code | Result |
 | --- | --- |
-| 0 | `condition_met`, or `cycle_limit` / PC `halted` with no condition requested |
-| 1 | `timeout`, `cancelled`, `machine_fault`, or a cycle limit / PC halt before a requested condition |
+| 0 | `condition_met`, or `cycle_limit` / live `closed` / PC `halted` with no condition requested |
+| 1 | `timeout`, `cancelled`, `machine_fault`, `input_overflow`, or an exit before a requested condition |
 | 2 | `error` in the request, image handling, or diagnostics |
+
+## Live Mac mouse tests
+
+For the anchored ClasSICK candidate, run this from a terminal with `$rom` set to your local ROM and `$trace` set to a new file path.
+
+```powershell
+& "$build\boothush.exe" --machine mac128k --rom $rom --live 2 --mouse-dcd-invert 3 --cycles 440000000 --timeout-ms 60000 --mouse-record $trace --inspect 0xb00:1024
+& "$build\boothush.exe" --machine mac128k --rom $rom --mouse-replay $trace --cycles 440000000 --timeout-ms 60000 --inspect 0xb00:1024
+```
+
+Activate the BootHush window and wait for the ROM desktop. The mouse is relative to the guest viewport. Entering it anchors motion, and a held primary button captures motion through release. Let the pointer finish moving before closing if the trace should include the whole action. The JSON `mouse` fields report accepted `samples`, delivered `steps`, and `pending` transitions at stop.
+
+The text trace starts with `BHMOUSE1 EDGE_CYCLES DCD_INVERT STOP_CYCLE VBL_GUARD`. Each following line stores `CYCLE DX DY BUTTON`, with `0` for unchanged, `1` for release, and `2` for press. Reuse the same ROM, media, and any scheduled `--key` events when replaying. The run limits still apply. `--inspect` can read the ClasSICK ROM's `MWP1` state, `MLC1` loss counters, `MMD1` omissions, and `MCM1` coalescing counter. `--mouse-phase` remains available for exact pin-level experiments.
 
 ## Third-party code
 
