@@ -13,6 +13,7 @@
 #include "mac_mouse_api.h"
 #include "mac_mouse_trace.h"
 #include "pc286.h"
+#include "x64_media.h"
 
 enum {
     MAX_INSPECT_BYTES = 4096,
@@ -1146,14 +1147,46 @@ static bool capture_frame(const struct machine *machine, const wchar_t *path)
     return success;
 }
 
+static int verify_x64_media(const wchar_t *path, const wchar_t *expected_path)
+{
+    struct image disk = {0}, expected = {0};
+    const char *error = read_image(path, &disk, 67108864, 67108864,
+                                   "x64 disk must be a 67108864-byte raw image");
+    if (error == NULL && expected_path != NULL) {
+        error = read_image(expected_path, &expected, 1, 16 * 1024 * 1024,
+                           "expected EFI file must be 1..16777216 bytes");
+    }
+    x64_media_info info = {0};
+    if (error == NULL) error = x64_media_verify(disk.bytes, disk.size, expected.bytes, expected.size, &info);
+    free(disk.bytes);
+    free(expected.bytes);
+    if (error != NULL) return request_error(error);
+
+    printf("{\"status\":\"media_verified\",\"disk_size\":67108864,\"disk_sha256\":\"");
+    for (size_t i = 0; i < 32; ++i) printf("%02x", (unsigned)info.image_sha256[i]);
+    printf("\",\"esp_lba\":%" PRIu64 ",\"esp_sectors\":%" PRIu32
+           ",\"efi_size\":%" PRIu32 ",\"efi_sha256\":\"", info.partition_lba,
+           info.partition_sectors, info.efi_size);
+    for (size_t i = 0; i < 32; ++i) printf("%02x", (unsigned)info.efi_sha256[i]);
+    printf("\",\"entry_rva\":%" PRIu32 ",\"source\":\"gpt_fat32\",\"executed\":false}\n", info.entry_rva);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc >= 2 && wcscmp(argv[1], L"--verify-x64-media") == 0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        if ((argc != 3 && argc != 5) || (argc == 5 && wcscmp(argv[3], L"--expect-efi") != 0))
+            return request_error("usage: --verify-x64-media DISK [--expect-efi EFI_FILE]");
+        return verify_x64_media(argv[2], argc == 5 ? argv[4] : NULL);
+    }
     if (argc == 2 && wcscmp(argv[1], L"--version") == 0) {
         puts("BootHush build " __DATE__ " " __TIME__ "; identify exact executable with SHA-256");
         return 0;
     }
     if (argc == 2 && wcscmp(argv[1], L"--help") == 0) {
         puts("BootHush Windows emulator\n"
+             "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"

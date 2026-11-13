@@ -4,6 +4,8 @@ BootHush is a Windows 11 emulator for fast, repeatable ClasSICK development test
 
 ClasSICK developers can start with the [headless integration guide](docs/classick-integration.md) for the current Mac and 286 interfaces, runnable examples, and limitations. Read the local checkout to discover changes committed there.
 
+The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and a read-only disk and EFI inspection command. **An x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
+
 | Profile | Supported test path |
 | --- | --- |
 | `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA/SCC mouse and keyboard input, serial RTC/PRAM, and read-only single-sided 400 KiB IWM floppy media. Verified with ClasSICK replacement ROMs and an original 68000 floppy boot fixture. |
@@ -28,6 +30,7 @@ Choose a writable build directory. To build the executable without Python, add `
 - Set `BOOTHUSH_CLASSICK_WINDOW_ROM` and `BOOTHUSH_CLASSICK_WINDOW_ROM_SHA256` for the short-collect invert-3 ClasSICK ROM with the CS09 and MWP1 v2 diagnostics. This exercises a scheduled press, release and four quadrature transitions, then checks guest motion and loss counters.
 - Set `BOOTHUSH_CLASSICK_LIVE_ROM` to the 2026-11-12 anchored ClasSICK candidate with SHA-256 `faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c`. The native mouse integration test sends messages to an invisible BootHush window and verifies the four corners, two title-bar drags, release, and a content click against the ROM's RAM diagnostics and framebuffer.
 - Set `BOOTHUSH_FREEDOS_FLOPPY` to `120m/x86BOOT.img` from the [official FreeDOS 1.4 Floppy Edition](https://www.freedos.org/download/). The test verifies the boot image SHA-256, selects a language with a scheduled Enter, and checks the installer prompt.
+- Set both `BOOTHUSH_CLASSICK_X64_DISK` and `BOOTHUSH_CLASSICK_X64_EFI` to enable the optional pinned ClasSICK x64 media inspection test. It validates and compares the media without running it.
 
 ## Local process API
 

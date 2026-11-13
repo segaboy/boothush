@@ -4,7 +4,11 @@ BootHush is a Windows command-line test runner. The local checkout contains the 
 
 Normal runs are headless and return one JSON result. When launching from Python with redirected output, use `creationflags=subprocess.CREATE_NO_WINDOW` to keep the console hidden. `--window-mouse` uses an invisible owned window with injected messages. `--live` opens a visible window for an explicitly selected interactive session. Neither requires control of unrelated Windows applications.
 
-Every run requires `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
+Every guest run requires `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
+
+## ClasSICK x86-64 status
+
+BootHush does not yet boot or execute the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. See [x64 enablement](classick-x64.md) for an exact command, supported media, results, and remaining work.
 
 ## Inspect several regions at one stop
 
