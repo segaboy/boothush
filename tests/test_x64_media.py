@@ -118,6 +118,45 @@ class X64MediaTest(unittest.TestCase):
                                 capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return result.returncode, json.loads(result.stdout)
 
+    def test_software_instruction_probe(self):
+        disk, _ = make_media()
+        start = (DATA + 3) * SECTOR + 0x200
+        disk[start:start + 5] = bytes.fromhex('48 83 ec 08 cc')
+        path = self.path / 'software-probe.img'
+        path.write_bytes(disk)
+        before = hashlib.sha256(disk).hexdigest()
+        command = [os.environ['BOOTHUSH_EXE'], '--probe-x64-software', str(path), '--steps']
+        def run(n):
+            p = subprocess.run([*command, n], capture_output=True, text=True,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            return p.returncode, json.loads(p.stdout)
+        code, one = run('1')
+        self.assertEqual((code, one['status'], one['steps'], one['rip'], one['rsp']),
+                         (0, 'step_limit', 1, 0x10001004, 0x2000fff0))
+        self.assertFalse(one['firmware'])
+        self.assertFalse(one['valid_uefi_context'])
+        code, stopped = run('2')
+        self.assertEqual((code, stopped['status'], stopped['steps'], stopped['opcode']),
+                         (1, 'unsupported_instruction', 1, 0xcc))
+        self.assertEqual(stopped['disk_sha256'], before)
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+        self.assertEqual(run('0')[0], 2)
+
+    @unittest.skipUnless(os.environ.get('BOOTHUSH_CLASSICK_X64_DISK'), 'fixture not supplied')
+    def test_classick_first_software_instructions(self):
+        path = Path(os.environ['BOOTHUSH_CLASSICK_X64_DISK'])
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        if before != '80c279a69264cb07f2042bf14503c0687fa32e71057ee1196fc8174afbeeae4f':
+            self.skipTest('different ClasSICK disk build')
+        p = subprocess.run([os.environ['BOOTHUSH_EXE'], '--probe-x64-software', str(path), '--steps', '22'],
+                           capture_output=True, text=True,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        result = json.loads(p.stdout)
+        self.assertEqual((p.returncode, result['status'], result['steps'], result['rip']),
+                         (0, 'step_limit', 22, 0x10001b6e))
+        self.assertEqual(result['efi_sha256'], 'df284097539ed6b7c90700cb27589900b20d2e4c7574b7637ba5f387abba9fe9')
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
     def test_maps_synthetic_disk_and_rejects_bad_base(self):
         code, result = self.run_map(self.disk, '0x20000000')
         self.assertEqual(code, 0, result)

@@ -14,6 +14,7 @@
 #include "mac_mouse_trace.h"
 #include "pc286.h"
 #include "x64_media.h"
+#include "x64_soft_probe.h"
 #include "video_capture.h"
 #include "media_convert.h"
 
@@ -1388,6 +1389,28 @@ static int map_x64_media(const wchar_t *path, uint64_t base)
     return 0;
 }
 
+static int soft_x64_probe(const wchar_t *path, uint32_t steps)
+{
+    struct image disk = {0};
+    const char *error = read_image(path, &disk, 67108864, 67108864,
+                                   "x64 disk must be a 67108864-byte raw image");
+    x64_soft_result result = {0}; uint8_t disk_sha[32], efi_sha[32];
+    if (!error) error=x64_soft_probe(disk.bytes,disk.size,steps,&result,disk_sha,efi_sha);
+    free(disk.bytes);
+    if (error) return request_error(error);
+    printf("{\"status\":\"%s\",\"backend\":\"experimental_software_probe\",\"firmware\":false,"
+           "\"valid_uefi_context\":false,\"steps\":%" PRIu64 ",\"rip\":%" PRIu64
+           ",\"rsp\":%" PRIu64 ",\"rax\":%" PRIu64 ",\"rbp\":%" PRIu64
+           ",\"r8\":%" PRIu64 ",\"rflags\":%" PRIu64 ",\"opcode\":%u,\"fault_address\":%" PRIu64
+           ",\"disk_sha256\":\"",result.stop,result.steps,result.rip,result.rsp,result.rax,
+           result.rbp,result.r8,result.rflags,(unsigned)result.opcode,result.fault_address);
+    for (size_t i=0;i<32;++i) printf("%02x",(unsigned)disk_sha[i]);
+    fputs("\",\"efi_sha256\":\"",stdout);
+    for (size_t i=0;i<32;++i) printf("%02x",(unsigned)efi_sha[i]);
+    puts("\"}");
+    return strcmp(result.stop, "step_limit") == 0 ? 0 : 1;
+}
+
 /* This only queries the Windows API; it neither creates nor runs a guest. */
 static int probe_x64_capability(void)
 {
@@ -1420,6 +1443,13 @@ static int probe_x64_capability(void)
 
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc >= 2 && wcscmp(argv[1], L"--probe-x64-software") == 0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        uint32_t n[1];
+        if (argc != 5 || wcscmp(argv[3],L"--steps") != 0 || !parse_fields(argv[4],n,1) || !n[0] || n[0]>1000000)
+            return request_error("usage: --probe-x64-software DISK --steps 1..1000000");
+        return soft_x64_probe(argv[2],n[0]);
+    }
     if (argc >= 2 && wcscmp(argv[1], L"--map-x64-media") == 0) {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         uint64_t base = 0;
@@ -1455,6 +1485,7 @@ int wmain(int argc, wchar_t **argv)
         puts("BootHush Windows emulator\n"
              "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
              "Map only: --map-x64-media DISK --load-base ADDRESS (no execution)\n"
+             "Experimental x64 instruction probe: --probe-x64-software DISK --steps N (no firmware)\n"
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"

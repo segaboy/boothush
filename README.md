@@ -6,9 +6,11 @@ ClasSICK is the immediate development priority and the project exercising BootHu
 
 ClasSICK developers can start with the [headless integration guide](docs/classick-integration.md) for the current Mac and 286 interfaces, runnable examples, and limitations. Read the local checkout to discover changes committed there.
 
-The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and a read-only disk and EFI inspection command. **An x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
+The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and current development tools. **A complete x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
 `--map-x64-media DISK --load-base ADDRESS` additionally extracts the EFI file from the validated disk and constructs a relocated PE32+ image in host memory for inspection. It does not execute a guest.
+
+`--probe-x64-software DISK --steps N` interprets a small, explicitly documented set of x64 instructions from the disk's EFI entry point without a hypervisor. This experimental probe provides only a synthetic stack and zeroed registers, not a valid UEFI context; it is not a boot. Unsupported instructions and memory faults stop visibly. See the [x64 notes](docs/classick-x64.md) for the exact limits and exit statuses.
 
 An opt-in PS/2 auxiliary-device model has independent tests for ClasSICK's mouse startup and packet routing. It is not connected to a guest profile yet; see [PS/2 auxiliary model](docs/ps2-auxiliary.md).
 

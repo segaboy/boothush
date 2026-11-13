@@ -1,6 +1,19 @@
 # ClasSICK x86-64 enablement
 
-The objective is a Windows 11, headless BootHush test environment for ClasSICK's original x86-64 UEFI port, using its real disk image and automated guest input and diagnostics. The current implementation **does not boot or execute x86-64 code**. `pc286` is a different 16-bit machine. Media inspection below is a foundation and preflight check, not a replacement for VirtualBox or proof of guest behavior.
+The objective is a Windows 11, headless BootHush test environment for ClasSICK's original x86-64 UEFI port, using its real disk image and automated guest input and diagnostics. The current implementation **does not boot an x86-64 guest**. An experimental software probe can interpret a small subset of instructions in an EFI image without firmware. `pc286` is a different 16-bit machine. Media inspection and the probe are foundations, not proof of a UEFI boot or guest behavior.
+
+## Experimental software instruction probe
+
+The original BootHush interpreter below avoids the Windows Hypervisor Platform and requires no additional package or firmware. It is a deliberately small diagnostic path, not a complete x86-64 CPU, sandbox for arbitrary code, or machine profile. It extracts the EFI application from the validated disk, maps it at `0x10000000`, and interprets from its PE entry point using zeroed general registers, RFLAGS `2`, and a zero-filled 64 KiB stack at `0x20000000` with initial RSP `0x2000fff8`. In particular, RCX and RDX are zero; no valid UEFI image handle or system table is supplied. Only instruction fetches from the mapped image and 8-byte writes to the artificial stack are implemented. There is no instruction execution on the host, firmware, memory mapping services, timers, graphics, input, interrupts, or return-to-firmware path.
+
+```powershell
+& 'C:\Repos\boothush\out\windows\boothush.exe' --probe-x64-software `
+  'C:\ClasSICK\pc-fast-drag-20261112-a\window-drawing.img' --steps 1000
+```
+
+The subset consists of `push r64`, relative `call`, `sub rsp, imm8/imm32`, `mov r64, imm64` for the first eight registers, `lea r8,[rsp+disp8]`, and the specifically encoded `mov [rsp+disp32],rax` and `mov [rsp+disp8],imm32` forms. Other encodings stop before execution. The probe is bounded to 1–1,000,000 instructions; its JSON reports disk and EFI SHA-256, stop reason, executed step count, RIP, selected registers and flags, first opcode byte, and memory fault address. `step_limit` exits 0; unsupported instructions and memory faults exit 1; invalid requests exit 2. A stop is not a successful EFI load or firmware exit. The disk is read-only. No timing or hardware fidelity is claimed.
+
+For the pinned disk and EFI hashes below, the probe executed 22 instructions, then stopped at `0x10001b6e` on unsupported opcode `0x4d`. This is an observation with the artificial entry context above, not the result of the ClasSICK loader operating under UEFI. Synthetic tests separately check calls, stack bytes, register and flag results, unsupported instructions, stack bounds, truncated instruction fetch, step limits, and unchanged input media. As the interpreter gains instructions, this recorded stop will change.
 
 ## Check the current ClasSICK disk
 
