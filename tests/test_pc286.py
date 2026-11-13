@@ -136,6 +136,65 @@ class Pc286Tests(unittest.TestCase):
         result = self.boot(image, "--inspect", "0x410:5", floppy=True)
         self.assertEqual(result["memory"]["bytes"], "0100008002")
 
+    def test_selected_floppy_read_failure(self):
+        # Two independent BIOS reads. Failure paths save AX and FLAGS before
+        # posting distinct codes. The second buffer must never be clobbered.
+        program = bytearray.fromhex("31c0 8ec0 bb0006 b80102 b90200 31d2 cd13 72 00")
+        first_branch = len(program) - 1
+        program += bytes.fromhex("bb0008 b80102 b90100 ba0001 cd13 72 00")
+        second_branch = len(program) - 1
+        program += bytes.fromhex("b042 e680 fa f4")
+        first_failure = len(program)
+        program += bytes.fromhex("a30005 9c58 a30205 b0e1 e680 fa f4")
+        second_failure = len(program)
+        program += bytes.fromhex("a30005 9c58 a30205 b0e2 e680 fa f4")
+        program[first_branch] = first_failure - first_branch - 1
+        program[second_branch] = second_failure - second_branch - 1
+        image = bytearray(FLOPPY_SIZE)
+        image[:len(program)] = program
+        image[510:512] = b"\x55\xaa"
+        image[512:516] = b"BHAT"
+        image[15 * 512:15 * 512 + 4] = b"HEAD"
+        for selector, post, expected in ((None, 0x42, "4248415448454144"),
+                                         ("0:0:2", 0xe1, "0000000000000000"),
+                                         ("0:1:1", 0xe2, "4248415400000000"),
+                                         ("1:0:2", 0x42, "4248415448454144")):
+            args = ["--until-post", hex(post), "--inspect", "0x600:4", "--inspect", "0x800:4", "--inspect", "0x500:4"]
+            if selector:
+                args += ["--fail-floppy-read", selector]
+            result = self.boot(image, *args, floppy=True)
+            self.assertEqual(result["status"], "condition_met")
+            ranges = result["memory_ranges"]
+            self.assertEqual(ranges[0]["bytes"] + ranges[1]["bytes"], expected)
+            self.assertEqual(hashlib.sha256((self.scratch / "disk.img").read_bytes()).digest(), hashlib.sha256(image).digest())
+            if selector:
+                self.assertEqual(result["floppy_read_failure"]["injected"], int(post != 0x42))
+            else:
+                self.assertNotIn("floppy_read_failure", result)
+            if post != 0x42:
+                status = bytes.fromhex(ranges[2]["bytes"])
+                self.assertEqual(status[:2], b"\x00\x20")  # AL=0, AH=20h
+                self.assertTrue(status[2] & 1)  # Carry flag.
+
+        for invalid in ("0:0:0", "80:0:1", "0:2:1", "0:0:16"):
+            self.boot(image, "--fail-floppy-read", invalid, floppy=True, exit_code=2)
+        self.boot(make_rom(b"\xf4"), "--fail-floppy-read", "0:0:2", exit_code=2)
+
+        retry = bytearray(FLOPPY_SIZE)
+        retry_code = bytes.fromhex(
+            "31c0 8ec0 bb0006 b80102 b90200 31d2 cd13 "
+            "b80102 b90200 31d2 cd13 b044 e680 fa f4")
+        retry[:len(retry_code)] = retry_code
+        retry[510:512] = b"\x55\xaa"
+        result = self.boot(retry, "--until-post", "0x44", "--fail-floppy-read", "0:0:2", floppy=True)
+        self.assertEqual(result["floppy_read_failure"]["injected"], 2)
+
+        existing = self.scratch / "existing.ppm"
+        existing.write_bytes(b"do not replace")
+        self.boot(image, "--until-post", "0xe1", "--fail-floppy-read", "0:0:2",
+                  "--frame", existing, floppy=True, exit_code=2)
+        self.assertEqual(existing.read_bytes(), b"do not replace")
+
     def test_a20_gate_via_keyboard_controller(self):
         image = make_rom(bytes.fromhex(
             "31c0 8ed8 c60600055a "  # mov byte [0500],5a

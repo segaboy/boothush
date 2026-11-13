@@ -47,6 +47,9 @@ typedef struct {
     uint8_t post;
     bool post_written;
     bool halted;
+    bool read_failure_enabled;
+    uint8_t read_failure_cylinder, read_failure_head, read_failure_sector;
+    uint64_t read_failures;
 } pc286_state;
 
 /* These constructors copy the supplied image. NULL indicates invalid size or allocation failure. */
@@ -57,6 +60,8 @@ pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *disk, size_t disk_size);
 bool pc286_load_ega_rom(pc286 *machine, const uint8_t *rom, size_t size);
 bool pc286_set_ega_font(pc286 *machine, const uint8_t *font, size_t size);
+/* Built-in firmware only: fail every valid floppy read beginning at this CHS. */
+bool pc286_fail_floppy_read(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector);
 const uint8_t *pc286_hard_disk(const pc286 *machine);
 bool pc286_inject_scancode(pc286 *machine, uint8_t scancode);
 void pc286_expect_input(pc286 *machine, bool pending);

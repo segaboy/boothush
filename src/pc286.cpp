@@ -147,6 +147,9 @@ struct pc286 final : boothush_i286::Bus {
     bool post_written = false;
     uint8_t post = 0;
     bool built_in_firmware = false;
+    bool read_failure_enabled = false;
+    uint8_t read_failure_cylinder = 0, read_failure_head = 0, read_failure_sector = 0;
+    uint64_t read_failures = 0;
     bool future_input = false;
     bool extended_scan = false;
     unsigned pause_bytes = 0;
@@ -389,6 +392,14 @@ struct pc286 final : boothush_i286::Bus {
         if ((destination & 0xffff) + length > 0x10000 ||
             destination > ram.size() || length > ram.size() - destination) {
             disk_status(regs, hard, 9);
+            return;
+        }
+
+        if (!hard && operation == 0x02 && read_failure_enabled &&
+            cylinder == read_failure_cylinder && head == read_failure_head &&
+            sector == read_failure_sector) {
+            ++read_failures;
+            disk_status(regs, false, 0x20); // Controller failure; no bytes transferred.
             return;
         }
 
@@ -776,6 +787,18 @@ pc286 *pc286_create_floppy(const uint8_t *image, size_t size)
     return pc286_create_system(nullptr, 0, image, size, nullptr, 0);
 }
 
+bool pc286_fail_floppy_read(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector)
+{
+    if (!machine || !machine->built_in_firmware || !machine->floppy ||
+        cylinder >= cylinders || head >= heads || sector == 0 || sector > sectors_per_track)
+        return false;
+    machine->read_failure_enabled = true;
+    machine->read_failure_cylinder = uint8_t(cylinder);
+    machine->read_failure_head = uint8_t(head);
+    machine->read_failure_sector = uint8_t(sector);
+    return true;
+}
+
 pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size)
@@ -913,6 +936,11 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.post = machine->post;
     state.post_written = machine->post_written;
     state.halted = machine->terminal_halt();
+    state.read_failure_enabled = machine->read_failure_enabled;
+    state.read_failure_cylinder = machine->read_failure_cylinder;
+    state.read_failure_head = machine->read_failure_head;
+    state.read_failure_sector = machine->read_failure_sector;
+    state.read_failures = machine->read_failures;
     if (machine->fault != nullptr) {
         state.fault_operation = machine->fault;
         state.fault_address = state.pc;
