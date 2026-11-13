@@ -1,6 +1,6 @@
 # Experimental NES target
 
-BootHush has a first headless Nintendo Entertainment System development target. It executes a **limited CPU-only subset** against an original caller-supplied NROM cartridge. It is not yet a game-playing NES emulator: there is no PPU, display, APU, audio, controller, interrupts, DMA, save RAM, cartridge bank switching, timing, or complete CPU. Do not treat these results as physical-hardware validation.
+BootHush has a first headless Nintendo Entertainment System development target. It executes CPU instructions against an original caller-supplied NROM cartridge. It is not yet a game-playing NES emulator: there is no PPU, display, APU, audio, controller, external interrupts, DMA, save RAM, cartridge bank switching, or CPU/PPU timing. The CPU supports all 151 documented 6502 opcode encodings but has not passed a complete independent conformance suite. Do not treat these results as physical-hardware validation.
 
 ```powershell
 & 'C:\Repos\boothush\out\windows\boothush.exe' --machine nes `
@@ -18,9 +18,9 @@ The loader accepts a strict, exact-size **iNES 1.0 mapper 0** image with one or 
 
 The reset vector is read from `FFFC`–`FFFD`. The deterministic initial model sets A, X, Y and the 2 KiB RAM to zero, SP to `FD`, and flags to `24`; real console power-on state is not guaranteed to match. CPU addresses `0000`–`1FFF` mirror that RAM every 2 KiB. The cartridge occupies `8000`–`FFFF`. Unimplemented address reads and writes, including PPU, APU, controllers, PRG RAM and writes to cartridge ROM, stop with an explicit fault. ROM-write faulting is a diagnostic restriction, not a model of physical cartridge bus conflicts.
 
-The supported official opcodes are LDA immediate/zero-page/absolute; LDX and LDY immediate; STA zero-page/absolute; STX and STY zero-page/absolute; INX, DEX, INY, DEY, TAX, TAY, TXA, TYA; ADC and SBC immediate; CMP, CPX and CPY immediate; CLC, SEC, CLI, SEI, CLD, SED; JMP absolute; BEQ, BNE, BCC, BCS, BMI, BPL, BVC, BVS; and NOP. Arithmetic remains binary even when the decimal flag is set, as on the NES CPU. All other opcodes fault before being counted; BRK is not implemented as a stop instruction.
+The interpreter implements the 151 documented 6502 opcode encodings and addressing modes, including stack operations, BRK/RTI, and the indirect-JMP page-wrap behavior. Arithmetic remains binary even when the decimal flag is set, as on the NES CPU. Undocumented opcodes fault before being counted. BRK is an interrupt instruction, not a stop command. Device-triggered NMI and IRQ are not implemented. Instruction timing, dummy bus accesses, interrupt races, and cycle-accurate behavior are not modeled.
 
-The tests generate their own cartridges in temporary directories and cover both NROM PRG layouts, reset vectors, mirrored RAM, instruction flow, binary arithmetic, unsupported devices and opcodes, bounded stops, malformed cartridges, and unchanged input. They do not demonstrate graphics, controller operation, any commercial game, full CPU conformance, or physical timing.
+The tests generate their own cartridges in temporary directories and cover both NROM PRG layouts, reset vectors, mirrored RAM, instruction flow, unsupported devices and opcodes, bounded stops, malformed cartridges, and unchanged input. A separate CPU test checks all 151 documented opcode encodings are accepted and undocumented encodings rejected; exhaustively checks 262,144 ADC/SBC input and carry combinations with the decimal flag set; and tests representative addressing modes, stack/interrupt instructions, flags and page wrapping. Opcode acceptance is not exhaustive instruction conformance. These tests do not demonstrate graphics, controller operation, any commercial game, full CPU conformance, or physical timing.
 
 ## Hardware references
 

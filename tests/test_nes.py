@@ -83,8 +83,8 @@ class NesTarget(unittest.TestCase):
         code, r = self.run_nes(cartridge(bytes.fromhex('a955 ad0020')), '--inspect', '0:1')
         self.assertEqual((code, r['a'], r['pc'], r['fault']['operation'], r['fault']['address']),
                          (1, 0x55, 0x8002, 'unsupported_bus_read', 0x2000))
-        code, r = self.run_nes(cartridge(b'\x00'))
-        self.assertEqual((code, r['fault']['operation'], r['fault']['opcode']), (1, 'unsupported_opcode', 0))
+        code, r = self.run_nes(cartridge(b'\x02'))
+        self.assertEqual((code, r['fault']['operation'], r['fault']['opcode']), (1, 'unsupported_opcode', 2))
         code, r = self.run_nes(cartridge(bytes.fromhex('4c0080')), '--until-pc', '0x8003')
         self.assertEqual((code, r['status'], r['steps']), (1, 'condition_not_met', 100))
         code, r = self.run_nes(cartridge(bytes.fromhex('4c0080')))

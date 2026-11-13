@@ -107,6 +107,13 @@ if(BUILD_TESTING)
     add_test(NAME x64_soft_probe COMMAND boothush_x64_soft_probe_test)
     set_tests_properties(x64_soft_probe PROPERTIES TIMEOUT 20)
 
+    add_executable(boothush_nes_cpu_test tests/test_nes_cpu.cpp)
+    if(MINGW)
+        target_link_options(boothush_nes_cpu_test PRIVATE -static)
+    endif()
+    add_test(NAME nes_cpu COMMAND boothush_nes_cpu_test)
+    set_tests_properties(nes_cpu PROPERTIES TIMEOUT 20)
+
     foreach(device IN ITEMS ega mac_keyboard mac_mouse mac_rtc pc_at_devices pcat_floppy pcat_keyboard pcat_mouse)
         set(test_target "boothush_${device}_test")
         add_executable("${test_target}" "tests/test_${device}.cpp")
