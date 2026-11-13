@@ -74,6 +74,21 @@ def make_keyboard_rom():
 
 
 class MacKeyboardIntegration(unittest.TestCase):
+    def test_readiness_relative_key_press_and_release_are_observed(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get('BOOTHUSH_TEST_TMP')) as temp:
+            rom=Path(temp)/'keyboard.rom'; rom.write_bytes(make_keyboard_rom())
+            cmd=[os.environ['BOOTHUSH_EXE'],'--machine','mac128k','--rom',str(rom),
+                 '--cycles','500000','--timeout-ms','5000','--input-after','0xb00:1:3',
+                 '--key','0:0x24:1','--key','1:0x24:0','--until','0xb03:1:0xc9','--inspect','0xb00:7']
+            def run():
+                p=subprocess.run(cmd,capture_output=True,encoding='utf-8',timeout=10,
+                                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.assertEqual(p.returncode,0,(p.stdout,p.stderr)); return json.loads(p.stdout)
+            first=run(); self.assertEqual(first,run())
+            self.assertEqual(first['memory']['bytes'],'037d49c9088400')
+            self.assertTrue(first['input_schedule']['ready'])
+            self.assertEqual((first['input_schedule']['scheduled'],first['input_schedule']['accepted']),(2,2))
+
     def test_via_irq_and_scheduled_key_transitions(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("BOOTHUSH_TEST_TMP")) as temp:
             rom = Path(temp) / "keyboard.rom"

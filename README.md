@@ -8,7 +8,7 @@ ClasSICK developers can start with the [headless integration guide](docs/classic
 
 The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and current development tools. **A complete x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
-The experimental [NES target](docs/nes.md) runs supported NROM and NES 2.0 mapper-2/submapper-1 cartridges headlessly, with NTSC/PAL timing models, independent scheduled input for both controllers, and approximate PPU and audio capture. CPU, graphics, audio and cartridge compatibility remain incomplete.
+The experimental [NES target](docs/nes.md) runs supported NROM and NES 2.0 mapper-2/submapper-1 cartridges headlessly, with NTSC/PAL timing models, independent scheduled input for both controllers, cycle-aligned input and memory observations, and approximate PPU and audio capture. CPU, graphics, audio and cartridge compatibility remain incomplete.
 
 Other Windows applications can embed that same core using the experimental [NES C library and API](docs/nes-api.md). The build installs a DLL, C header and CMake package; an independent consumer example is included.
 

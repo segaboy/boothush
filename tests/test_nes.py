@@ -92,6 +92,11 @@ class NesTarget(unittest.TestCase):
                                     '--controller-event', '3:1', '--controller-event', '4:0')
         self.assertEqual((code, result['status'], result['memory']['bytes']), (0, 'condition_met', '4140'))
         self.assertEqual(result['controller_schedule'], {'scheduled': 2, 'accepted': 2, 'pending': 0})
+        code, timed = self.run_nes(image, '--until-pc', '0x8014', '--controller-event', '3:1',
+                                   '--controller-event', '4:0', '--controller-timing', '1')
+        self.assertEqual(code,0)
+        self.assertEqual([e['requested_step'] for e in timed['instruction_schedule']['events']],[3,4])
+        self.assertLess(timed['instruction_schedule']['events'][0]['actual_cycle'],timed['instruction_schedule']['events'][1]['actual_cycle'])
 
     def test_mapper2_banking_ram_and_validation(self):
         # A generated 512 KiB NES 2.0 board; reset in the fixed last bank.
@@ -130,6 +135,128 @@ class NesTarget(unittest.TestCase):
         self.assertEqual(result['controller_schedule'], {'scheduled': 4, 'accepted': 4, 'pending': 0})
         self.assertEqual([c['accepted'] for c in result['controllers']], [2, 2])
         self.assertEqual(self.run_nes(image, *args), (code, result))
+
+    def test_cycle_scenarios_readiness_observations_and_order(self):
+        # Publish ready=1, then repeatedly latch and record both controllers.
+        image = cartridge(bytes.fromhex('a901 8510 a901 8d1640 a900 8d1640 ad1640 8500 ad1740 8501 4c0480'))
+        def scenario(p1, p2):
+            args = ('--input-after', '0x10:1:1', '--controller-cycle', f'0:{p1}',
+                    '--controller2-cycle', f'0:{p2}', '--controller-cycle', '50:0',
+                    '--controller2-cycle', '50:0', '--observe-cycle', '50:0:2',
+                    '--observe-cycle', '100:0:2', '--until-input-cycle', '100')
+            return self.run_nes(image, *args, steps=1000)
+        neutral=scenario(0,0); player1=scenario(1,0); player2=scenario(0,1); both=scenario(1,1)
+        self.assertEqual(scenario(1,1),both)
+        for code,result in (neutral,player1,player2,both):
+            self.assertEqual((code,result['status'],result['readiness']['reached']), (0,'condition_met',True))
+            self.assertEqual((result['readiness']['cycle'],result['controller_schedule']['accepted']), (5,4))
+            self.assertEqual((result['cycle_observations']['completed'],result['cycle_observations']['pending']), (2,0))
+            for event in result['cycle_schedule']['events']:
+                self.assertGreaterEqual(event['actual_cycle'],event['target_cycle'])
+            self.assertEqual([event['port'] for event in result['cycle_schedule']['events']], [1,2,1,2])
+            for sample in result['cycle_observations']['samples']:
+                self.assertGreaterEqual(sample['actual_cycle'],sample['target_cycle'])
+            self.assertEqual(result['cpu_cycles'],result['cycle_observations']['samples'][-1]['actual_cycle'])
+        snapshots=[r['cycle_observations']['samples'][0]['bytes'] for _,r in (neutral,player1,player2,both)]
+        self.assertEqual(snapshots,['4040','4140','4041','4141'])
+        self.assertEqual(len({r['cycle_observations']['samples'][0]['actual_cycle'] for _,r in (neutral,player1,player2,both)}),1)
+        code,without_events=self.run_nes(image,'--input-after','0x10:1:1','--observe-cycle','50:0:2',
+                                         '--until-input-cycle','100',steps=1000)
+        self.assertEqual((code,without_events['cycle_observations']['samples'][0]['bytes']),(0,'4040'))
+
+    def test_cycle_stops_bounds_and_pending_events(self):
+        image=cartridge(bytes.fromhex('ea 4c0080'))
+        code,r=self.run_nes(image,'--controller-cycle','2:1','--observe-cycle','2:0:1','--until-cycle','2')
+        self.assertEqual((code,r['status'],r['cpu_cycles']),(0,'condition_met',2))
+        self.assertEqual((r['controller_schedule']['accepted'],r['controller_schedule']['pending']),(0,1))
+        self.assertEqual(r['cycle_observations']['completed'],1)
+        code,r=self.run_nes(image,'--input-after','0:1:1','--controller-cycle','0:1','--until-input-cycle','20',steps=10)
+        self.assertEqual((code,r['status'],r['readiness']['reached'],r['controller_schedule']['pending']),(1,'readiness_not_reached',False,1))
+        code,r=self.run_nes(image,'--until-cycle','1000',steps=2)
+        self.assertEqual((code,r['status']),(1,'condition_not_met'))
+        code,r=self.run_nes(image,'--until-frame','1',steps=20000)
+        self.assertEqual((code,r['status'],r['ppu_frames']),(0,'condition_met',1))
+        for args in (('--controller-event','1:1','--controller-cycle','2:1'),
+                     ('--controller-cycle','2:1','--controller-cycle','1:0'),
+                     ('--observe-cycle','0:0x1fff:2'),('--until-cycle','4','--until-frame','1'),
+                     ('--input-after','0x2000:1:0','--controller-cycle','0:1'),
+                     ('--until-input-cycle','1',)):
+            with self.subTest(args=args): self.assertEqual(self.run_nes(image,*args)[0],2)
+
+    def test_controller_witness_guest_reads_and_overflow(self):
+        program=bytes.fromhex('a901 8d1640 a900 8d1640 ad1640 8500 ad1740 8501 4c0080')
+        image=cartridge(program); witness=self.file.parent/'controller.txt'
+        args=('--controller1','1','--controller2','0','--until-pc','0x8014','--controller-witness',str(witness))
+        code,result=self.run_nes(image,*args)
+        self.assertEqual((code,result['status']),(0,'condition_met'))
+        rows=witness.read_text().splitlines(); header=rows[0].split(); events=[r.split() for r in rows[2:]]
+        self.assertEqual(header[0],'BHNESCTRL1')
+        self.assertEqual((result['controller_witness']['events'],result['controller_witness']['dropped']),(4,0))
+        self.assertEqual([(e[4],int(e[5]),int(e[6]),int(e[7])) for e in events],
+                         [('strobe',0,1,1),('strobe',0,0,0),('read',1,65,0),('read',2,64,0)])
+        code,plain=self.run_nes(image,'--controller1','1','--controller2','0','--until-pc','0x8014')
+        self.assertEqual(code,0); result.pop('controller_witness'); self.assertEqual(result,plain)
+        self.assertEqual(self.run_nes(image,*args)[0],2) # Existing output is protected.
+        filtered=self.file.parent/'filtered.txt'
+        code,result=self.run_nes(image,'--until-pc','0x8014','--controller-witness',str(filtered),
+                                 '--controller-witness-cycles','0:5')
+        self.assertEqual((code,result['controller_witness']['events']),(0,1))
+        full=self.file.parent/'full.txt'
+        code,result=self.run_nes(image,'--controller-witness',str(full),steps=30000)
+        self.assertEqual((code,result['controller_witness']['events']),(0,8192))
+        self.assertGreater(result['controller_witness']['dropped'],0)
+        self.assertEqual(self.run_nes(image,'--controller-witness-cycles','0:5')[0],2)
+
+    @unittest.skipUnless(os.environ.get('BOOTHUSH_STB_UNROM'), 'Super Tilt Bro UNROM fixture not supplied')
+    def test_author_game_cycle_aligned_scenarios(self):
+        source=Path(os.environ['BOOTHUSH_STB_UNROM'])
+        digest='5d045246f12d424c2c67ecda883c66d8d346f7b5396ed819ddb326f44dcb5aaa'
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),digest)
+        nav=[(1,1000000,1),(1,1030000,0),(1,1800000,1),(1,1830000,0),
+             (1,4000000,8),(1,4050000,0),(1,6500000,1),(1,6550000,0),
+             (1,7500000,8),(1,7550000,0),(2,6500000,1),(2,6550000,0),
+             (1,10000000,0),(1,11500000,0),(2,10000000,0),(2,11500000,0)]
+        common=[os.environ['BOOTHUSH_EXE'],'--machine','nes','--rom',str(source),'--timeout-ms','30000']
+        legacy=common+['--steps','13000000','--controller-timing','1']
+        for port,step,mask in nav: legacy += ['--controller-event' if port==1 else '--controller2-event',f'{step}:{mask}']
+        p=subprocess.run(legacy,capture_output=True,text=True,timeout=35,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+        baseline=json.loads(p.stdout); end_cycle=baseline['cpu_cycles']
+        events=baseline['instruction_schedule']['events']
+        self.assertEqual(len(events),len(nav)); self.assertTrue(all(e['applied'] for e in events))
+        movement_start=next(e['actual_cycle'] for e in events if e['requested_step']==10000000)
+        def run(name,p1,p2):
+            frame=self.file.parent/(name+'.ppm')
+            cmd=common+['--steps','15000000','--until-cycle',str(end_cycle),
+                        '--observe-cycle',f'{end_cycle}:0:256','--inspect','0:2048',
+                        '--inspect-oam','0:256','--frame',str(frame)]
+            witness=self.file.parent/(name+'.ctrl')
+            if name in ('cycle-both','cycle-both-repeat'):
+                cmd += ['--controller-witness',str(witness),'--controller-witness-cycles',f'{movement_start}:{movement_start+100000}']
+            for event in events:
+                mask=event['mask']
+                if event['requested_step']==10000000: mask=p1 if event['port']==1 else p2
+                cmd += ['--controller-cycle' if event['port']==1 else '--controller2-cycle',
+                        f"{event['actual_cycle']}:{mask}"]
+            p=subprocess.run(cmd,capture_output=True,text=True,timeout=35,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+            result=json.loads(p.stdout)
+            self.assertEqual((result['status'],result['rom_sha256'],result['cartridge']['region']),('condition_met',digest,'pal'))
+            self.assertEqual((result['controller_schedule']['accepted'],result['cycle_observations']['completed']),(len(events),1))
+            self.assertEqual(result['stop_condition']['target_cycle'],end_cycle)
+            self.assertGreaterEqual(result['cpu_cycles'],end_cycle)
+            self.assertLess(result['cpu_cycles']-end_cycle,1024)
+            if witness.exists():
+                rows=[row.split() for row in witness.read_text().splitlines()[2:]]
+                self.assertEqual(result['controller_witness']['dropped'],0)
+                self.assertTrue({1,2}.issubset({int(row[5]) for row in rows if row[4]=='read'}))
+                self.assertTrue(all(any(row[4]=='read' and int(row[5])==port and int(row[6])==65 for row in rows) for port in (1,2)))
+            return result,frame.read_bytes()
+        neutral=run('cycle-neutral',0,0); one=run('cycle-p1',128,0); two=run('cycle-p2',0,64)
+        both=run('cycle-both',128,64); repeated=run('cycle-both-repeat',128,64)
+        self.assertEqual(both,repeated)
+        self.assertNotEqual(one[1],neutral[1]);self.assertNotEqual(two[1],neutral[1])
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),digest)
 
     def test_concurrent_cpu_ppu_and_oam_inspection(self):
         program = bytes.fromhex('a900 8d0620 8d0620 a97b 8d0720 a900 8d0320 a956 8d0420 a9aa 8500')

@@ -18,10 +18,14 @@ nes *nes_create(const uint8_t *rom, size_t size, const char **error);
 /* region: 0=header/default, 1=NTSC, 2=PAL */
 nes *nes_create_region(const uint8_t *rom, size_t size, unsigned region, const char **error);
 typedef struct { unsigned mapper, submapper, header_region, pal, selected_bank, battery_flag; size_t prg_rom, chr_rom, prg_ram, chr_ram; } nes_cartridge_info;
+typedef struct { uint64_t cycle,step,frame; uint16_t pc; uint8_t kind,port,value,strobe; } nes_controller_witness_event;
 nes_cartridge_info nes_get_cartridge_info(const nes *machine);
 void nes_destroy(nes *machine);
 bool nes_step(nes *machine);
 void nes_set_controller(nes *machine, unsigned port, uint8_t buttons);
+/* Guest reads/writes only, recorded at instruction-start timing. */
+bool nes_enable_controller_witness(nes *machine, uint64_t first_cycle, uint64_t last_cycle);
+const nes_controller_witness_event *nes_controller_witness(const nes *machine, size_t *count, uint64_t *dropped);
 bool nes_capture_audio(nes *machine);
 const int16_t *nes_audio(const nes *machine, size_t *sample_count);
 void nes_audio_consume(nes *machine, size_t sample_count);

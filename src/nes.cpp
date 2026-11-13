@@ -33,8 +33,16 @@ struct nes {
     bool dma_pending=false;
     uint8_t controller_live[2]{}, controller_shift[2]{};
     bool controller_strobe=false;
+    bool controller_witness_enabled=false;
+    uint64_t controller_witness_first=0,controller_witness_last=0,controller_witness_dropped=0;
+    std::vector<nes_controller_witness_event> controller_witness;
     unsigned extra_cycles=0;
     const char *fault=nullptr;
+    void trace_controller(uint8_t kind,uint8_t port,uint8_t value) {
+        if(!controller_witness_enabled || cpu_cycles<controller_witness_first || cpu_cycles>controller_witness_last) return;
+        if(controller_witness.size()==8192) {++controller_witness_dropped;return;}
+        controller_witness.push_back({cpu_cycles,steps,ppu.frame_count(),instruction_pc,kind,port,value,uint8_t(controller_strobe)});
+    }
     bool peek(uint16_t addr, uint8_t &v) const {
         if (addr<0x2000) { v=ram[addr&0x7ff]; return true; }
         if (addr>=0x6000 && addr<0x8000 && !prg_ram.empty()) {v=prg_ram[addr-0x6000];return true;}
@@ -53,6 +61,7 @@ struct nes {
             unsigned port=addr-0x4016;
             uint8_t bit=uint8_t((controller_strobe?controller_live[port]:controller_shift[port])&1);
             if(!controller_strobe) controller_shift[port]=uint8_t((controller_shift[port]>>1)|0x80);
+            trace_controller(1,uint8_t(port+1),uint8_t(0x40|bit));
             return uint8_t(0x40|bit); // Deterministic approximation of upper open-bus bits.
         }
         if (!peek(addr,v) && !fault) { fault="unsupported_bus_read"; fault_address=addr; }
@@ -77,6 +86,7 @@ struct nes {
                 controller_shift[0]=controller_live[0];controller_shift[1]=controller_live[1];
             }
             controller_strobe=strobe;
+            trace_controller(0,0,v);
         }
         else if((addr>=0x4000 && addr<=0x4013) || addr==0x4015 || addr==0x4017) apu.write(addr,v);
         else if(addr>=0x6000 && addr<0x8000 && !prg_ram.empty()) prg_ram[addr-0x6000]=v;
@@ -258,6 +268,14 @@ nes_cartridge_info nes_get_cartridge_info(const nes *m) {return {m->mapper,m->su
 void nes_destroy(nes *m) {delete m;}
 bool nes_step(nes *m) {return m->step();}
 void nes_set_controller(nes *m,unsigned port,uint8_t buttons) {if(port<2) m->controller_live[port]=buttons;}
+bool nes_enable_controller_witness(nes *m,uint64_t first,uint64_t last) {
+    if(first>last) return false;
+    try {m->controller_witness.reserve(8192);} catch(...) {return false;}
+    m->controller_witness_first=first;m->controller_witness_last=last;m->controller_witness_enabled=true;return true;
+}
+const nes_controller_witness_event *nes_controller_witness(const nes *m,size_t *count,uint64_t *dropped) {
+    *count=m->controller_witness.size();*dropped=m->controller_witness_dropped;return m->controller_witness.data();
+}
 bool nes_capture_audio(nes *m) {return m->apu.capture();}
 const int16_t *nes_audio(const nes *m,size_t *count) {const auto &s=m->apu.samples();*count=s.size();return s.data();}
 void nes_audio_consume(nes *m,size_t count) {m->apu.consume_samples(count);}
