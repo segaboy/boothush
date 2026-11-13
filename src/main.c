@@ -1,5 +1,9 @@
 #define WIN32_LEAN_AND_MEAN
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0a00
+#endif
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -13,6 +17,7 @@
 #include "mac_mouse_api.h"
 #include "mac_mouse_trace.h"
 #include "pc286.h"
+#include "nes.h"
 #include "x64_media.h"
 #include "x64_soft_probe.h"
 #include "video_capture.h"
@@ -1411,6 +1416,59 @@ static int soft_x64_probe(const wchar_t *path, uint32_t steps)
     return strcmp(result.stop, "step_limit") == 0 ? 0 : 1;
 }
 
+/* NES starts as a separate bounded CPU development target. Unsupported machine
+   options must not fall through into Mac or PC behavior. */
+static int run_nes(int argc, wchar_t **argv)
+{
+    const wchar_t *path=NULL;
+    uint32_t steps=0, timeout=0, target=0, fields[2], addr=0, len=0;
+    bool machine_seen=false, target_set=false;
+    if (argc%2==0) return request_error("expected pairs of options and values");
+    for(int i=1;i<argc;i+=2) {
+        const wchar_t *o=argv[i],*v=argv[i+1];
+        if(wcscmp(o,L"--machine")==0 && !machine_seen && wcscmp(v,L"nes")==0) machine_seen=true;
+        else if(wcscmp(o,L"--rom")==0 && !path && *v) path=v;
+        else if(wcscmp(o,L"--steps")==0 && !steps && parse_fields(v,fields,1) && fields[0]>=1 && fields[0]<=1000000) steps=fields[0];
+        else if(wcscmp(o,L"--timeout-ms")==0 && !timeout && parse_fields(v,fields,1) && fields[0]>=1 && fields[0]<=MAX_TIMEOUT_MS) timeout=fields[0];
+        else if(wcscmp(o,L"--until-pc")==0 && !target_set && parse_fields(v,fields,1) && fields[0]<=0xffff) {target=fields[0];target_set=true;}
+        else if(wcscmp(o,L"--inspect")==0 && !len && parse_fields(v,fields,2) && fields[0]<=0xffff && fields[1]>=1 && fields[1]<=4096 && fields[1]<=0x10000-fields[0]) {addr=fields[0];len=fields[1];}
+        else return request_error("invalid, unsupported, or repeated NES option");
+    }
+    if(!machine_seen || !path || !steps || !timeout) return request_error("nes requires --rom, --steps, and --timeout-ms");
+    struct image rom={0};
+    const char *error=read_image(path,&rom,16,16+32768+8192,"NES image must fit supported NROM dimensions");
+    if(error){free(rom.bytes);return request_error(error);}
+    uint8_t digest[32]; BCRYPT_ALG_HANDLE alg=NULL;
+    if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0 ||
+       BCryptHash(alg,NULL,0,rom.bytes,rom.size,digest,32)<0) {
+        if(alg) BCryptCloseAlgorithmProvider(alg,0);
+        free(rom.bytes);
+        return request_error("cannot calculate NES cartridge SHA-256");
+    }
+    BCryptCloseAlgorithmProvider(alg,0);
+    nes *n=nes_create(rom.bytes,rom.size,&error);free(rom.bytes);
+    if(!n) return request_error(error);
+    const ULONGLONG started=GetTickCount64(); const char *status="step_limit"; int rc=0;
+    for(;;) {
+        nes_state s=nes_get_state(n);
+        if(target_set && s.pc==target) {status="condition_met";break;}
+        if(s.steps>=steps) {if(target_set){status="condition_not_met";rc=1;}break;}
+        if(GetTickCount64()-started>=timeout) {status="timeout";rc=1;break;}
+        if(!nes_step(n)) {status="machine_fault";rc=1;break;}
+    }
+    nes_state state=nes_get_state(n); uint8_t bytes[4096];
+    if(len && !nes_inspect(n,(uint16_t)addr,bytes,len)) {nes_destroy(n);return request_error("NES inspection must stay within supported RAM or cartridge ROM");}
+    printf("{\"status\":\"%s\",\"machine\":\"nes\",\"profile\":\"experimental_nrom_cpu\","
+           "\"steps\":%" PRIu64 ",\"pc\":%u,\"a\":%u,\"x\":%u,\"y\":%u,\"sp\":%u,\"flags\":%u,\"rom_sha256\":\"",
+           status,state.steps,(unsigned)state.pc,(unsigned)state.a,(unsigned)state.x,
+           (unsigned)state.y,(unsigned)state.sp,(unsigned)state.flags);
+    for(size_t i=0;i<32;i++) printf("%02x",(unsigned)digest[i]);
+    putchar('"');
+    if(state.fault) printf(",\"fault\":{\"operation\":\"%s\",\"address\":%u,\"opcode\":%u}",state.fault,(unsigned)state.fault_address,(unsigned)state.fault_opcode);
+    if(len) {printf(",\"memory\":{\"address\":%u,\"bytes\":\"",addr);for(uint32_t i=0;i<len;i++) printf("%02x",bytes[i]);fputs("\"}",stdout);}
+    puts("}");nes_destroy(n);return rc;
+}
+
 /* This only queries the Windows API; it neither creates nor runs a guest. */
 static int probe_x64_capability(void)
 {
@@ -1443,6 +1501,10 @@ static int probe_x64_capability(void)
 
 int wmain(int argc, wchar_t **argv)
 {
+    for (int i=1;i+1<argc;i+=2) if(wcscmp(argv[i],L"--machine")==0 && wcscmp(argv[i+1],L"nes")==0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        return run_nes(argc,argv);
+    }
     if (argc >= 2 && wcscmp(argv[1], L"--probe-x64-software") == 0) {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         uint32_t n[1];
@@ -1486,6 +1548,7 @@ int wmain(int argc, wchar_t **argv)
              "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
              "Map only: --map-x64-media DISK --load-base ADDRESS (no execution)\n"
              "Experimental x64 instruction probe: --probe-x64-software DISK --steps N (no firmware)\n"
+             "Experimental NES CPU: --machine nes --rom NROM.nes --steps N --timeout-ms N [--until-pc ADDRESS] [--inspect ADDRESS:LENGTH]\n"
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
