@@ -101,6 +101,7 @@ private:
     mac128k &machine_;
 
     void sync(int cycles) override;
+    void willInterrupt(moira::u8 level) override;
     moira::u8 read8(moira::u32 address) const override;
     moira::u16 read16(moira::u32 address) const override;
     moira::u32 read32(moira::u32 address) const override;
@@ -150,6 +151,8 @@ struct mac128k {
     uint64_t witness_last = 0;
     uint64_t witness_dropped = 0;
     size_t witness_count = 0;
+    bool witness_detail = false;
+    uint32_t witness_pending = 0;
     boothush::Iwm iwm{};
     MacKeyboard keyboard{};
     MacRtc rtc{};
@@ -206,7 +209,8 @@ struct mac128k {
         const uint8_t dcd = x.dcd_status() | (y.dcd_status() << 1);
         witness[witness_count++] = {cycle, address, static_cast<uint8_t>(kind), reg, value,
                                     x.phase, y.phase, mouse_pressed, scc_pending(), latched,
-                                    dcd, via_ifr(), interrupt_enable, irq_level};
+                                    dcd, via_ifr(), interrupt_enable, irq_level,
+                                    cpu.getPC0(), 0, 0, witness_pending, 0, 0, 0};
     }
 
     unsigned ca2_mode() const
@@ -566,6 +570,12 @@ void Cpu::sync(int cycles)
     machine_.tick(static_cast<uint64_t>(getClock()));
 }
 
+void Cpu::willInterrupt(moira::u8 level)
+{
+    if (machine_.witness && machine_.witness_detail)
+        machine_.observe(MAC128K_WITNESS_IRQ_ACCEPT, static_cast<uint64_t>(getClock()), 0, 0, level);
+}
+
 moira::u8 Cpu::read8(moira::u32 address) const
 {
     return static_cast<moira::u8>(machine_.read_bus(address, 1, "read8"));
@@ -697,6 +707,29 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
     machine->witness_dropped = 0;
     machine->observe(MAC128K_WITNESS_SNAPSHOT, static_cast<uint64_t>(machine->cpu.getClock()));
     return true;
+}
+
+void mac128k_mouse_witness_detailed(mac128k *machine, bool enabled)
+{
+    machine->witness_detail = enabled;
+}
+
+void mac128k_mouse_witness_pending(mac128k *machine, uint32_t pending)
+{
+    if (machine->witness_detail) machine->witness_pending = pending;
+}
+
+void mac128k_mouse_witness_input(mac128k *machine, enum mac128k_mouse_witness_kind kind,
+                                 uint8_t source, int32_t dx, int32_t dy, uint8_t value,
+                                 uint32_t pending, uint64_t due, uint64_t deadline)
+{
+    if (!machine->witness || !machine->witness_detail) return;
+    const size_t before = machine->witness_count;
+    machine->observe(kind, static_cast<uint64_t>(machine->cpu.getClock()), 0, 0, value);
+    if (machine->witness_count == before) return;
+    auto &event = machine->witness[before];
+    event.source = source; event.dx = dx; event.dy = dy; event.pending = pending;
+    event.due = due; event.deadline = deadline;
 }
 
 const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine, size_t *count, uint64_t *dropped)

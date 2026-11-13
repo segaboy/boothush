@@ -10,6 +10,10 @@ Every guest run requires `--machine`, `--cycles`, and `--timeout-ms`. Each guest
 
 BootHush does not yet boot or execute the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. See [x64 enablement](classick-x64.md) for an exact command, supported media, results, and remaining work.
 
+## Correlate the Mac mouse timing
+
+The opt-in `--mouse-witness-detail 1` extends the existing bounded witness with scheduled and accepted input, pending transitions, guard deadlines, CPU interrupt acceptance and instruction context. It retains the existing witness by default and works headlessly with record/replay. See the [correlated mouse witness guide](mac-mouse-witness.md) for exact 2,048- and 4,096-cycle commands, field definitions and limits. A transition while an SCC interrupt is pending is an observation in this model, not a diagnosis or physical-hardware timing result.
+
 ## Inspect several regions at one stop
 
 Repeat `--inspect` for each physical range. Up to 16 ranges are allowed, with 4,096 bytes per range and 16,384 bytes total. Overlapping ranges are returned independently in request order. Reads use side-effect-free diagnostic access to Mac RAM or PC conventional RAM and its video aperture. A single range returns the established `memory` object. Multiple ranges return `memory_ranges`, whose entries each contain `address` and hexadecimal `bytes`.

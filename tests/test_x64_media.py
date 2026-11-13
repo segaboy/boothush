@@ -105,6 +105,21 @@ class X64MediaTest(unittest.TestCase):
                                 capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return result.returncode, json.loads(result.stdout)
 
+    def test_host_capability_does_not_claim_execution(self):
+        result = subprocess.run([os.environ['BOOTHUSH_EXE'], '--x64-capability'], capture_output=True,
+                                text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        record = json.loads(result.stdout)
+        self.assertEqual(record['backend'], 'whpx')
+        self.assertFalse(record['implemented'])
+        self.assertFalse(record['guest_executed'])
+        if result.returncode == 0:
+            self.assertEqual(record['status'], 'x64_capability')
+            self.assertIsInstance(record['hypervisor_present'], bool)
+        else:
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(record['status'], 'x64_capability_error')
+            self.assertTrue('hresult' in record or 'error' in record)
+
     def test_valid_and_read_only(self):
         code, result = self.run_verify(self.disk, '--expect-efi', self.efi)
         self.assertEqual(code, 0, result)

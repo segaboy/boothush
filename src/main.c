@@ -87,6 +87,7 @@ struct request {
     bool mouse_invert_set;
     bool mouse_guard_set;
     bool mouse_witness_range_set;
+    bool mouse_witness_detail;
     bool raw_mouse_phases;
     bool relative_motion;
     bool window_input;
@@ -105,6 +106,7 @@ struct machine {
 };
 
 struct mouse_session {
+    mac128k *mac;
     mac_mouse *bridge;
     mac_live_window *window;
     mac_mouse_trace *record;
@@ -118,6 +120,12 @@ struct mouse_session {
     uint64_t ready_cycle;
     size_t scheduled;
     size_t scheduled_accepted;
+    uint8_t source;
+    uint32_t edge_cycles, guard_cycles;
+    uint8_t invert;
+    uint64_t last_guard_due, last_guard_deadline;
+    bool guard_noted;
+    bool witness_detail;
 };
 
 struct machine_state {
@@ -326,6 +334,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_replay_path = value;
         } else if (wcscmp(option, L"--mouse-witness") == 0 && request->mouse_witness_path == NULL) {
             request->mouse_witness_path = value;
+        } else if (wcscmp(option, L"--mouse-witness-detail") == 0 && !request->mouse_witness_detail) {
+            if (wcscmp(value, L"1") != 0) return "mouse-witness-detail requires 1";
+            request->mouse_witness_detail = true;
         } else if (wcscmp(option, L"--pc-witness") == 0 && request->pc_witness_path == NULL) {
             request->pc_witness_path = value;
         } else if (wcscmp(option, L"--pc-witness-memory") == 0 && !request->pc_witness_memory.length) {
@@ -466,6 +477,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->mouse_witness_range_set && request->mouse_witness_path == NULL) {
         return "mouse-witness-range requires mouse-witness";
     }
+    if (request->mouse_witness_detail && request->mouse_witness_path == NULL)
+        return "mouse-witness-detail requires mouse-witness";
     if (!request->mouse_witness_range_set) {
         request->mouse_witness_last = request->cycle_limit;
     }
@@ -582,7 +595,8 @@ static bool write_new_file(const wchar_t *path, const char *header, DWORD header
     return success;
 }
 
-static bool write_mouse_witness(const mac128k *mac, const struct request *request, uint64_t stop)
+static bool write_mouse_witness(const mac128k *mac, const struct request *request,
+                                const struct mouse_session *mouse, uint64_t stop)
 {
     static const char fields[] = "cycle kind address reg value x_phase y_phase pressed "
                                  "scc_pending scc_latched scc_dcd via_ifr via_ier irq_level\n";
@@ -595,22 +609,46 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         [MAC128K_WITNESS_VIA_WRITE] = "via_write",
         [MAC128K_WITNESS_IRQ] = "irq",
         [MAC128K_WITNESS_SNAPSHOT] = "snapshot",
+        [MAC128K_WITNESS_IRQ_ACCEPT] = "irq_accept",
+        [MAC128K_WITNESS_INPUT_DUE] = "input_due",
+        [MAC128K_WITNESS_SAMPLE_ACCEPTED] = "sample_accepted",
+        [MAC128K_WITNESS_SAMPLE_REJECTED] = "sample_rejected",
+        [MAC128K_WITNESS_GUARD] = "guard",
     };
     size_t count;
     uint64_t dropped;
     const mac128k_mouse_witness_event *events = mac128k_mouse_witness(mac, &count, &dropped);
-    enum { MAX_ROW_LENGTH = 128 };
-    const size_t capacity = sizeof(fields) + (count + 1) * MAX_ROW_LENGTH;
+    enum { MAX_ROW_LENGTH = 256 };
+    const size_t capacity = sizeof(fields) + (count + 2) * MAX_ROW_LENGTH;
     char *buffer = malloc(capacity);
     if (buffer == NULL) {
         return false;
     }
-    size_t length = (size_t)snprintf(buffer, capacity,
+    size_t length;
+    if (request->mouse_witness_detail) {
+        length = (size_t)snprintf(buffer, capacity,
+            "BHMACMOUSE2 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u\n"
+            "seq cycle kind pc address reg value x_phase y_phase pressed scc_pending scc_latched scc_dcd via_ifr via_ier irq_level source dx dy pending due deadline\n",
+            request->mouse_witness_first, request->mouse_witness_last, stop, count, dropped,
+            dropped == 0, stop >= request->mouse_witness_last,
+            mouse->edge_cycles, mouse->guard_cycles, (unsigned)mouse->invert);
+    } else length = (size_t)snprintf(buffer, capacity,
                                     "BHMACMOUSE1 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 "\n%s",
                                     request->mouse_witness_first, request->mouse_witness_last,
                                     stop, count, dropped, fields);
     for (size_t index = 0; index < count && length < capacity; ++index) {
         const mac128k_mouse_witness_event *event = &events[index];
+        if (request->mouse_witness_detail) {
+            length += (size_t)snprintf(buffer + length, capacity - length,
+                "%zu %" PRIu64 " %s %" PRIu32 " %" PRIu32 " %u %u %u %u %u %u %u %u %u %u %u %u %" PRId32 " %" PRId32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n",
+                index, event->cycle, kinds[event->kind], event->pc, event->address,
+                (unsigned)event->reg, (unsigned)event->value, (unsigned)event->x_phase,
+                (unsigned)event->y_phase, (unsigned)event->pressed, (unsigned)event->scc_pending,
+                (unsigned)event->scc_latched, (unsigned)event->scc_dcd, (unsigned)event->via_ifr,
+                (unsigned)event->via_ier, (unsigned)event->irq_level, (unsigned)event->source,
+                event->dx, event->dy, event->pending, event->due, event->deadline);
+            continue;
+        }
         length += (size_t)snprintf(buffer + length, capacity - length,
                                    "%" PRIu64 " %s %" PRIu32 " %u %u %u %u %u %u %u %u %u %u %u\n",
                                    event->cycle, kinds[event->kind], event->address,
@@ -675,6 +713,7 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         invert = mac_mouse_trace_dcd_invert(mouse->replay);
         vbl_guard = mac_mouse_trace_vbl_guard_cycles(mouse->replay);
     }
+    mouse->edge_cycles = edge_cycles; mouse->guard_cycles = vbl_guard; mouse->invert = invert;
     mouse->bridge = mac_mouse_create_timed(edge_cycles, invert, vbl_guard);
     if (mouse->bridge == NULL) {
         return "cannot initialize the mouse bridge";
@@ -711,9 +750,28 @@ static void close_mouse_session(struct mouse_session *mouse)
     mac_mouse_destroy(mouse->bridge);
 }
 
+static void note_mouse_guard(struct mouse_session *mouse)
+{
+    if (!mouse->witness_detail) return;
+    uint64_t raw, guarded;
+    if (!mac_mouse_unguarded_next_cycle(mouse->bridge, &raw) ||
+        !mac_mouse_next_cycle(mouse->bridge, &guarded) || guarded <= raw) {
+        mouse->guard_noted = false;
+        return;
+    }
+    if (!mouse->guard_noted || raw != mouse->last_guard_due || guarded != mouse->last_guard_deadline) {
+        mac128k_mouse_witness_input(mouse->mac, MAC128K_WITNESS_GUARD, 0, 0, 0, 0,
+                                    mac_mouse_pending(mouse->bridge), raw, guarded);
+        mouse->last_guard_due = raw; mouse->last_guard_deadline = guarded; mouse->guard_noted = true;
+    }
+}
+
 static bool queue_mouse_sample(struct mouse_session *mouse, mac_mouse_sample sample)
 {
     if (mouse->record != NULL && !mac_mouse_trace_append(mouse->record, sample)) {
+        mac128k_mouse_witness_input(mouse->mac, MAC128K_WITNESS_SAMPLE_REJECTED, mouse->source,
+            sample.dx, sample.dy, sample.button_changed ? (sample.pressed ? 2 : 1) : 0,
+            mac_mouse_pending(mouse->bridge), sample.cycle, 0);
         return false;
     }
     if (!mac_mouse_queue_sample(mouse->bridge, sample.cycle, sample.dx, sample.dy,
@@ -721,9 +779,17 @@ static bool queue_mouse_sample(struct mouse_session *mouse, mac_mouse_sample sam
         if (mouse->record != NULL) {
             mac_mouse_trace_pop(mouse->record);
         }
+        mac128k_mouse_witness_input(mouse->mac, MAC128K_WITNESS_SAMPLE_REJECTED, mouse->source,
+            sample.dx, sample.dy, sample.button_changed ? (sample.pressed ? 2 : 1) : 0,
+            mac_mouse_pending(mouse->bridge), sample.cycle, 0);
         return false;
     }
     ++mouse->accepted;
+    mac128k_mouse_witness_pending(mouse->mac, mac_mouse_pending(mouse->bridge));
+    mac128k_mouse_witness_input(mouse->mac, MAC128K_WITNESS_SAMPLE_ACCEPTED, mouse->source,
+        sample.dx, sample.dy, sample.button_changed ? (sample.pressed ? 2 : 1) : 0,
+        mac_mouse_pending(mouse->bridge), sample.cycle, 0);
+    note_mouse_guard(mouse);
     return true;
 }
 
@@ -881,6 +947,7 @@ static mac_live_status refresh_live(struct machine *machine, struct mouse_sessio
         *presented_vbl = state.vbl;
     }
     mac_live_event event;
+    mouse->source = 4;
     while (mac_live_window_next_event(mouse->window, &event)) {
         if (!queue_mouse_sample(mouse, (mac_mouse_sample){
             state.cycles, event.dx, event.dy, event.button_changed, event.pressed})) {
@@ -903,6 +970,7 @@ static bool enqueue_replay_samples(struct mouse_session *mouse, uint64_t through
     }
     const size_t count = mac_mouse_trace_count(mouse->replay);
     const mac_mouse_sample *samples = mac_mouse_trace_samples(mouse->replay);
+    mouse->source = 3;
     while (mouse->replay_index < count && samples[mouse->replay_index].cycle <= through_cycle) {
         if (!queue_mouse_sample(mouse, samples[mouse->replay_index])) {
             return false;
@@ -1009,6 +1077,14 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                (!mouse->readiness_requested || mouse->ready) &&
                (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle <= state.cycles) {
             const struct input_event event = request->input_events[next_event];
+            if (machine->mac != NULL && (event.kind == INPUT_BUTTON || event.kind == INPUT_MOTION ||
+                                        event.kind == INPUT_PHASE || event.kind == INPUT_WINDOW)) {
+                mouse->source = event.kind == INPUT_WINDOW ? 2 : 1;
+                mac128k_mouse_witness_input(machine->mac, MAC128K_WITNESS_INPUT_DUE, mouse->source,
+                    event.first, event.second, (uint8_t)event.kind,
+                    mouse->bridge ? mac_mouse_pending(mouse->bridge) : 0,
+                    (uint64_t)event.cycle + mouse->ready_cycle, event.action);
+            }
             if (!apply_input(machine, mouse, event, state.cycles)) {
                 if (event.kind == INPUT_WINDOW) {
                     return (struct run_result){"input_error", "window mouse event rejected or input queue full", 1};
@@ -1031,11 +1107,19 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         uint64_t mouse_deadline = cycle_limit;
         if (mouse->bridge != NULL) {
             mac_mouse_state input;
+            uint64_t before_deadline = UINT64_MAX;
+            mac_mouse_next_cycle(mouse->bridge, &before_deadline);
             if (mac_mouse_advance(mouse->bridge, state.cycles, &input)) {
+                mac128k_mouse_witness_pending(machine->mac, mac_mouse_pending(mouse->bridge));
                 mac128k_set_mouse_phase(machine->mac, input.x_phase, input.y_phase);
                 mac128k_set_mouse_button(machine->mac, input.pressed);
                 ++mouse->emitted;
+            } else if (before_deadline <= state.cycles &&
+                       mac_mouse_next_cycle(mouse->bridge, &mouse_deadline) && mouse_deadline > state.cycles) {
+                mac128k_mouse_witness_input(machine->mac, MAC128K_WITNESS_GUARD, 0, 0, 0, 0,
+                    mac_mouse_pending(mouse->bridge), state.cycles, mouse_deadline);
             }
+            note_mouse_guard(mouse);
             mac_mouse_next_cycle(mouse->bridge, &mouse_deadline);
         }
 
@@ -1172,8 +1256,42 @@ static int verify_x64_media(const wchar_t *path, const wchar_t *expected_path)
     return 0;
 }
 
+/* This only queries the Windows API; it neither creates nor runs a guest. */
+static int probe_x64_capability(void)
+{
+    HMODULE library = LoadLibraryExW(L"WinHvPlatform.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HRESULT status;
+    BOOL present = FALSE;
+    UINT32 written = 0;
+    if (library == NULL) {
+        status = HRESULT_FROM_WIN32(GetLastError());
+    } else {
+        typedef HRESULT (WINAPI *capability_fn)(UINT32, void *, UINT32, UINT32 *);
+        capability_fn query = (capability_fn)(void *)GetProcAddress(library, "WHvGetCapability");
+        if (query == NULL) status = HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+        else status = query(0, &present, sizeof(present), &written);
+        FreeLibrary(library);
+    }
+    if (FAILED(status)) {
+        printf("{\"status\":\"x64_capability_error\",\"backend\":\"whpx\",\"hresult\":\"0x%08" PRIx32
+               "\",\"implemented\":false,\"guest_executed\":false}\n", (uint32_t)status);
+        return 1;
+    }
+    if (written < sizeof(present)) {
+        puts("{\"status\":\"x64_capability_error\",\"backend\":\"whpx\",\"error\":\"incomplete capability response\",\"implemented\":false,\"guest_executed\":false}");
+        return 1;
+    }
+    printf("{\"status\":\"x64_capability\",\"backend\":\"whpx\",\"hypervisor_present\":%s,"
+           "\"implemented\":false,\"guest_executed\":false}\n", present ? "true" : "false");
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc == 2 && wcscmp(argv[1], L"--x64-capability") == 0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        return probe_x64_capability();
+    }
     if (argc >= 2 && wcscmp(argv[1], L"--verify-x64-media") == 0) {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         if ((argc != 3 && argc != 5) || (argc == 5 && wcscmp(argv[3], L"--expect-efi") != 0))
@@ -1187,6 +1305,7 @@ int wmain(int argc, wchar_t **argv)
     if (argc == 2 && wcscmp(argv[1], L"--help") == 0) {
         puts("BootHush Windows emulator\n"
              "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
+             "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
@@ -1195,7 +1314,7 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
              "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
-             "  --mouse-witness-range FIRST:LAST --mouse-edge-cycles N --mouse-vbl-guard N\n"
+             "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
@@ -1219,6 +1338,8 @@ int wmain(int argc, wchar_t **argv)
         !mac128k_start_mouse_witness(machine.mac, request.mouse_witness_first, request.mouse_witness_last)) {
         error = "cannot initialize the mouse device witness";
     }
+    if (error == NULL && request.mouse_witness_detail)
+        mac128k_mouse_witness_detailed(machine.mac, true);
     if (error == NULL && request.pc_witness_path != NULL &&
         !pc286_start_witness(machine.pc, request.pc_witness_memory.address,
                              request.pc_witness_memory.address + request.pc_witness_memory.length,
@@ -1240,6 +1361,8 @@ int wmain(int argc, wchar_t **argv)
         }
     }
     struct mouse_session mouse = {0};
+    mouse.mac = machine.mac;
+    mouse.witness_detail = request.mouse_witness_detail;
     error = open_mouse_session(&mouse, &request);
     if (error != NULL) {
         close_mouse_session(&mouse);
@@ -1288,7 +1411,7 @@ int wmain(int argc, wchar_t **argv)
             result = (struct run_result){"error", "cannot create or write requested mouse trace", 2};
         }
     }
-    if (request.mouse_witness_path != NULL && !write_mouse_witness(machine.mac, &request, state.cycles)) {
+    if (request.mouse_witness_path != NULL && !write_mouse_witness(machine.mac, &request, &mouse, state.cycles)) {
         result = (struct run_result){"error", "cannot create or write requested mouse witness", 2};
     }
     if (request.pc_witness_path != NULL && !write_pc_witness(machine.pc, &request, state.cycles)) {

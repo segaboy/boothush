@@ -51,6 +51,13 @@ void mac128k_set_mouse_phase(mac128k *machine, uint8_t x_phase, uint8_t y_phase)
 /* Enables device observations for the inclusive cycle range and clears old rows. */
 bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_t last_cycle);
 
+/* Detailed observations are opt-in; the legacy witness remains unchanged. */
+void mac128k_mouse_witness_detailed(mac128k *machine, bool enabled);
+void mac128k_mouse_witness_pending(mac128k *machine, uint32_t pending);
+void mac128k_mouse_witness_input(mac128k *machine, enum mac128k_mouse_witness_kind kind,
+                                 uint8_t source, int32_t dx, int32_t dy, uint8_t value,
+                                 uint32_t pending, uint64_t due, uint64_t deadline);
+
 /* Returns the retained prefix and counts discarded rows after the cap. */
 const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine,
                                                         size_t *count, uint64_t *dropped);

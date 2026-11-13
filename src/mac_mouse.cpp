@@ -91,10 +91,14 @@ void MacMouse::append(Event event)
 
 std::optional<uint64_t> MacMouse::next_cycle() const
 {
-    if (size_ == 0 || !ready_cycle_) {
-        return std::nullopt;
-    }
-    return after_vbl_guard(std::max(queue_[head_].cycle, *ready_cycle_));
+    const auto next = unguarded_next_cycle();
+    return next ? after_vbl_guard(*next) : std::nullopt;
+}
+
+std::optional<uint64_t> MacMouse::unguarded_next_cycle() const
+{
+    if (size_ == 0 || !ready_cycle_) return std::nullopt;
+    return std::max(queue_[head_].cycle, *ready_cycle_);
 }
 
 std::optional<mac_mouse_state> MacMouse::advance(uint64_t cycle)
@@ -184,6 +188,15 @@ bool mac_mouse_queue_sample(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_
 bool mac_mouse_next_cycle(const mac_mouse *mouse, uint64_t *cycle)
 {
     if (const auto next = mouse->mouse.next_cycle()) {
+        *cycle = *next;
+        return true;
+    }
+    return false;
+}
+
+bool mac_mouse_unguarded_next_cycle(const mac_mouse *mouse, uint64_t *cycle)
+{
+    if (const auto next = mouse->mouse.unguarded_next_cycle()) {
         *cycle = *next;
         return true;
     }

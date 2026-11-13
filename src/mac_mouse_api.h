@@ -33,6 +33,8 @@ bool mac_mouse_queue_button(mac_mouse *mouse, uint64_t cycle, bool pressed);
 bool mac_mouse_queue_sample(mac_mouse *mouse, uint64_t cycle, int32_t dx, int32_t dy,
                             bool button_changed, bool pressed);
 bool mac_mouse_next_cycle(const mac_mouse *mouse, uint64_t *cycle);
+/* Nominal deadline before the VBL guard. */
+bool mac_mouse_unguarded_next_cycle(const mac_mouse *mouse, uint64_t *cycle);
 bool mac_mouse_advance(mac_mouse *mouse, uint64_t cycle, mac_mouse_state *state);
 uint32_t mac_mouse_pending(const mac_mouse *mouse);
 

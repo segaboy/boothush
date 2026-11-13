@@ -6,6 +6,8 @@ ClasSICK developers can start with the [headless integration guide](docs/classic
 
 The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and a read-only disk and EFI inspection command. **An x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
+`--x64-capability` reports a Windows Hypervisor Platform availability query without creating a virtual machine or executing a guest. It does not establish that a usable backend exists in BootHush.
+
 | Profile | Supported test path |
 | --- | --- |
 | `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA/SCC mouse and keyboard input, serial RTC/PRAM, and read-only single-sided 400 KiB IWM floppy media. Verified with ClasSICK replacement ROMs and an original 68000 floppy boot fixture. |
@@ -64,6 +66,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
 | `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |
+| `--mouse-witness-detail 1` | With `--mouse-witness`, select the extended `BHMACMOUSE2` format with input, guard, CPU interrupt acceptance, PC context and queue information. See [correlated mouse witness](docs/mac-mouse-witness.md). The original format remains the default. |
 | `--input-after ADDRESS:WIDTH:VALUE` | Start a scheduled-input timeline when this physical-memory condition first matches. Scheduled cycle numbers become offsets from the first matching instruction boundary. Zero-offset events are applied at that boundary. Requires scheduled input and works headlessly with direct input or window messages. |
 | `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. |
 | `--pc-witness-memory ADDRESS:LENGTH` | With `--pc-witness`, record byte bus reads and writes within the specified physical range. |

@@ -34,6 +34,7 @@ public:
     // changes each take one transition and stay separate from motion vectors.
     uint32_t pending_transitions() const { return pending_transitions_; }
     std::optional<uint64_t> next_cycle() const;
+    std::optional<uint64_t> unguarded_next_cycle() const;
     std::optional<mac_mouse_state> advance(uint64_t cycle);
 
 private:
