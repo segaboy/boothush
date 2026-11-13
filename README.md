@@ -2,6 +2,8 @@
 
 BootHush is a Windows 11 emulator for fast, repeatable ClasSICK development tests. Each invocation loads local images, runs an isolated guest, returns one JSON result, and exits. Runs are headless by default. The Mac profile also has an opt-in window for live mouse testing and recording.
 
+ClasSICK developers can start with the [headless integration guide](docs/classick-integration.md) for the current Mac and 286 interfaces, runnable examples, and limitations. Read the local checkout to discover changes committed there.
+
 | Profile | Supported test path |
 | --- | --- |
 | `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA/SCC mouse and keyboard input, serial RTC/PRAM, and read-only single-sided 400 KiB IWM floppy media. Verified with ClasSICK replacement ROMs and an original 68000 floppy boot fixture. |
@@ -55,7 +57,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-motion CYCLE:DX:DY` | Macintosh only. Queue signed pixel deltas through the same paced quadrature bridge used for live input. Positive X is right and positive Y is down. Scheduled buttons join the same queue. |
 | `--window-mouse CYCLE:X:Y:ACTION` | Macintosh only. Deliver a logical mouse event to an invisible owned window at a guest cycle. Actions are 0 for unpressed movement, 1 for primary press, 2 for held movement, and 3 for release. X is 0–511 and Y is 0–341. Events must be in cycle order. |
 | `--live SCALE` | Macintosh only. Open a native mouse window at integer scale 1–4 and pace the guest to its nominal 7.8336 MHz clock. |
-| `--mouse-record PATH` | With `--live` or `--window-mouse`, write the accepted mouse samples and their guest cycles to a new trace file. |
+| `--mouse-record PATH` | With `--live`, `--window-mouse`, or `--mouse-motion`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
 | `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |

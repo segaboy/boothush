@@ -33,7 +33,7 @@ Look for `ClasSICK live ROM accepted corners, drags and a click.` The test execu
 
 This regression uses injected window messages. A physical mouse run is a separate check of how Windows delivers ordinary mouse input.
 
-## Record a physical mouse run
+## Run a background mouse test
 
 For a background injected-window test using the same ROM and no visible window, run the following. The coordinates are positions in BootHush's 512×342 input viewport. The first event anchors the window pointer. Button actions use logical primary messages, independently of the Windows swapped-button setting.
 
@@ -55,8 +55,6 @@ $result.memory.bytes -ceq $replay.memory.bytes
 
 The verified candidate reaches pointer `(150,110)`, window `(112,46)`, three presses, released button, pattern `1`, and zero pending transitions. `input_source` reports `injected_window_messages`. This exercises the owned window procedure and guest but does not use operating-system mouse delivery or a physical device. A controller can launch BootHush with `CREATE_NO_WINDOW` to keep its console hidden.
 
-The following section describes a separately requested interactive session that opens a visible window.
-
 ## Input after guest readiness
 
 Input offsets can be anchored to a memory condition that the guest writes when it is ready. For the older divisor-4 fixture, whose SHA-256 is `b6b9072e7f034d1839a15f6782ed6870e2721fb6677eef320201ef772c506f2f`, the following run observes stage 16 before submitting a 32-pixel motion. Use a fresh trace path.
@@ -69,6 +67,8 @@ $trace = Join-Path $env:TEMP ('ready-' + [guid]::NewGuid().ToString('N') + '.bhm
 ```
 
 On the tested fixture, readiness was detected at cycle 77,711,848 and all 64 quadrature transitions were applied by cycle 90,000,010. The observed guest movement and omission counters remain separate checks. `--input-after` can also anchor `--window-mouse` events, and it is bounded by the normal cycle and timeout limits.
+
+## Record a physical mouse run
 
 ```powershell
 $capture = Join-Path $build ('mouse-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
