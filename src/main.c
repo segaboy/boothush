@@ -74,6 +74,7 @@ struct request {
     struct predicate until;
     struct predicate input_after;
     struct inspection pc_witness_memory, pc_witness_io;
+    struct inspection mouse_witness_memory;
     uint32_t pc_witness_first, pc_witness_last;
     bool pc_witness_cycles_set;
     struct inspection inspect[MAX_INSPECT_RANGES];
@@ -208,6 +209,26 @@ static bool parse_fields(const wchar_t *text, uint32_t *fields, size_t count)
         }
     }
     return *text == '\0';
+}
+
+static bool parse_u64(const wchar_t *text, uint64_t *result)
+{
+    uint64_t value = 0, base = 10;
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) { text += 2; base = 16; }
+    const wchar_t *first = text;
+    while (*text) {
+        unsigned digit;
+        if (*text >= '0' && *text <= '9') digit = (unsigned)(*text - '0');
+        else if (base == 16 && *text >= 'a' && *text <= 'f') digit = (unsigned)(*text - 'a') + 10;
+        else if (base == 16 && *text >= 'A' && *text <= 'F') digit = (unsigned)(*text - 'A') + 10;
+        else return false;
+        if (value > (UINT64_MAX - digit) / base) return false;
+        value = value * base + digit;
+        ++text;
+    }
+    if (text == first) return false;
+    *result = value;
+    return true;
 }
 
 static bool parse_delta(const wchar_t **text, int32_t *delta)
@@ -356,6 +377,11 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mouse-witness-detail") == 0 && !request->mouse_witness_detail) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-detail requires 1";
             request->mouse_witness_detail = true;
+        } else if (wcscmp(option, L"--mouse-witness-memory") == 0 && !request->mouse_witness_memory.length) {
+            if (!parse_fields(value, fields, 2) || fields[1] == 0 || fields[0] >= MAC128K_RAM_SIZE ||
+                fields[1] > MAC128K_RAM_SIZE - fields[0])
+                return "mouse-witness-memory requires an address:length within Mac RAM";
+            request->mouse_witness_memory = (struct inspection){fields[0], fields[1]};
         } else if (wcscmp(option, L"--pc-witness") == 0 && request->pc_witness_path == NULL) {
             request->pc_witness_path = value;
         } else if (wcscmp(option, L"--pc-witness-memory") == 0 && !request->pc_witness_memory.length) {
@@ -502,6 +528,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     }
     if (request->mouse_witness_detail && request->mouse_witness_path == NULL)
         return "mouse-witness-detail requires mouse-witness";
+    if (request->mouse_witness_memory.length && (!request->mouse_witness_path || !request->mouse_witness_detail))
+        return "mouse-witness-memory requires mouse-witness and mouse-witness-detail 1";
     if (!request->mouse_witness_range_set) {
         request->mouse_witness_last = request->cycle_limit;
     }
@@ -637,6 +665,7 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         [MAC128K_WITNESS_SAMPLE_ACCEPTED] = "sample_accepted",
         [MAC128K_WITNESS_SAMPLE_REJECTED] = "sample_rejected",
         [MAC128K_WITNESS_GUARD] = "guard",
+        [MAC128K_WITNESS_RAM_WRITE] = "ram_write",
     };
     size_t count;
     uint64_t dropped;
@@ -648,7 +677,17 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         return false;
     }
     size_t length;
-    if (request->mouse_witness_detail) {
+    if (request->mouse_witness_memory.length) {
+        uint64_t matched, ram_dropped;
+        mac128k_mouse_witness_memory_stats(mac, &matched, &ram_dropped);
+        length = (size_t)snprintf(buffer, capacity,
+            "BHMACMOUSE3 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n"
+            "seq cycle kind pc address reg value x_phase y_phase pressed scc_pending scc_latched scc_dcd via_ifr via_ier irq_level source dx dy pending due deadline ram_offset width captured_offset captured_width captured_value\n",
+            request->mouse_witness_first, request->mouse_witness_last, stop, count, dropped,
+            dropped == 0, stop >= request->mouse_witness_last, mouse->edge_cycles, mouse->guard_cycles,
+            (unsigned)mouse->invert, request->mouse_witness_memory.address, request->mouse_witness_memory.length,
+            matched, ram_dropped);
+    } else if (request->mouse_witness_detail) {
         length = (size_t)snprintf(buffer, capacity,
             "BHMACMOUSE2 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u\n"
             "seq cycle kind pc address reg value x_phase y_phase pressed scc_pending scc_latched scc_dcd via_ifr via_ier irq_level source dx dy pending due deadline\n",
@@ -663,13 +702,19 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         const mac128k_mouse_witness_event *event = &events[index];
         if (request->mouse_witness_detail) {
             length += (size_t)snprintf(buffer + length, capacity - length,
-                "%zu %" PRIu64 " %s %" PRIu32 " %" PRIu32 " %u %u %u %u %u %u %u %u %u %u %u %u %" PRId32 " %" PRId32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n",
+                "%zu %" PRIu64 " %s %" PRIu32 " %" PRIu32 " %u %u %u %u %u %u %u %u %u %u %u %u %" PRId32 " %" PRId32 " %" PRIu32 " %" PRIu64 " %" PRIu64,
                 index, event->cycle, kinds[event->kind], event->pc, event->address,
                 (unsigned)event->reg, (unsigned)event->value, (unsigned)event->x_phase,
                 (unsigned)event->y_phase, (unsigned)event->pressed, (unsigned)event->scc_pending,
                 (unsigned)event->scc_latched, (unsigned)event->scc_dcd, (unsigned)event->via_ifr,
                 (unsigned)event->via_ier, (unsigned)event->irq_level, (unsigned)event->source,
                 event->dx, event->dy, event->pending, event->due, event->deadline);
+            if (length < capacity && request->mouse_witness_memory.length) {
+                length += (size_t)snprintf(buffer + length, capacity - length,
+                    " %" PRIu32 " %u %u %u %" PRIu32, event->ram_offset, (unsigned)event->width,
+                    (unsigned)event->captured_offset, (unsigned)event->captured_width, event->captured_value);
+            }
+            if (length < capacity) length += (size_t)snprintf(buffer + length, capacity - length, "\n");
             continue;
         }
         length += (size_t)snprintf(buffer + length, capacity - length,
@@ -1302,6 +1347,28 @@ static int verify_x64_media(const wchar_t *path, const wchar_t *expected_path)
     return 0;
 }
 
+static int map_x64_media(const wchar_t *path, uint64_t base)
+{
+    struct image disk = {0};
+    const char *error = read_image(path, &disk, 67108864, 67108864,
+                                   "x64 disk must be a 67108864-byte raw image");
+    x64_mapped_media_info info = {0};
+    if (!error) error = x64_media_map(disk.bytes, disk.size, base, &info);
+    free(disk.bytes);
+    if (error) return request_error(error);
+    printf("{\"status\":\"image_mapped\",\"source\":\"gpt_fat32\",\"executed\":false,"
+           "\"disk_sha256\":\"");
+    for (size_t i = 0; i < 32; ++i) printf("%02x", (unsigned)info.media.image_sha256[i]);
+    printf("\",\"efi_sha256\":\"");
+    for (size_t i = 0; i < 32; ++i) printf("%02x", (unsigned)info.media.efi_sha256[i]);
+    printf("\",\"mapped_sha256\":\"");
+    for (size_t i = 0; i < 32; ++i) printf("%02x", (unsigned)info.mapped_sha256[i]);
+    printf("\",\"preferred_base\":%" PRIu64 ",\"loaded_base\":%" PRIu64
+           ",\"entry_address\":%" PRIu64 ",\"image_size\":%" PRIu32 ",\"relocations\":%" PRIu32 "}\n",
+           info.preferred_base, info.loaded_base, info.entry_address, info.image_size, info.relocations);
+    return 0;
+}
+
 /* This only queries the Windows API; it neither creates nor runs a guest. */
 static int probe_x64_capability(void)
 {
@@ -1334,6 +1401,13 @@ static int probe_x64_capability(void)
 
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc >= 2 && wcscmp(argv[1], L"--map-x64-media") == 0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        uint64_t base = 0;
+        if (argc != 5 || wcscmp(argv[3], L"--load-base") != 0 || !parse_u64(argv[4], &base))
+            return request_error("usage: --map-x64-media DISK --load-base ADDRESS");
+        return map_x64_media(argv[2], base);
+    }
     if (argc >= 2 && wcscmp(argv[1], L"--convert-capture") == 0) {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         if (argc != 5 || wcscmp(argv[3], L"--output") != 0 || !*argv[2] || !*argv[4])
@@ -1361,6 +1435,7 @@ int wmain(int argc, wchar_t **argv)
     if (argc == 2 && wcscmp(argv[1], L"--help") == 0) {
         puts("BootHush Windows emulator\n"
              "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
+             "Map only: --map-x64-media DISK --load-base ADDRESS (no execution)\n"
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
@@ -1372,7 +1447,8 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
              "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
-             "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-edge-cycles N --mouse-vbl-guard N\n"
+             "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-witness-memory ADDRESS:LENGTH\n"
+             "  --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
@@ -1398,6 +1474,10 @@ int wmain(int argc, wchar_t **argv)
     }
     if (error == NULL && request.mouse_witness_detail)
         mac128k_mouse_witness_detailed(machine.mac, true);
+    if (error == NULL && request.mouse_witness_memory.length &&
+        !mac128k_mouse_witness_memory(machine.mac, request.mouse_witness_memory.address,
+                                      request.mouse_witness_memory.length))
+        error = "cannot initialize mouse witness RAM filter";
     if (error == NULL && request.pc_witness_path != NULL &&
         !pc286_start_witness(machine.pc, request.pc_witness_memory.address,
                              request.pc_witness_memory.address + request.pc_witness_memory.length,

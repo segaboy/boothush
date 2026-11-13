@@ -6,6 +6,8 @@ ClasSICK developers can start with the [headless integration guide](docs/classic
 
 The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and a read-only disk and EFI inspection command. **An x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
+`--map-x64-media DISK --load-base ADDRESS` additionally extracts the EFI file from the validated disk and constructs a relocated PE32+ image in host memory for inspection. It does not execute a guest.
+
 An opt-in PS/2 auxiliary-device model has independent tests for ClasSICK's mouse startup and packet routing. It is not connected to a guest profile yet; see [PS/2 auxiliary model](docs/ps2-auxiliary.md).
 
 An independent x64 boot-services state model tests page allocation and stale memory-map keys, but is not yet connected to guest firmware or execution.
@@ -75,6 +77,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
 | `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |
 | `--mouse-witness-detail 1` | With `--mouse-witness`, select the extended `BHMACMOUSE2` format with input, guard, CPU interrupt acceptance, PC context and queue information. See [correlated mouse witness](docs/mac-mouse-witness.md). The original format remains the default. |
+| `--mouse-witness-memory ADDRESS:LENGTH` | With the detailed Mac witness, add guest RAM writes overlapping the selected physical RAM offsets. This selects the `BHMACMOUSE3` format; filtered bytes, bus width, coverage and drop counts are documented in the [witness guide](docs/mac-mouse-witness.md). |
 | `--input-after ADDRESS:WIDTH:VALUE` | Start a scheduled-input timeline when this physical-memory condition first matches. Scheduled cycle numbers become offsets from the first matching instruction boundary. Zero-offset events are applied at that boundary. Requires scheduled input and works headlessly with direct input or window messages. |
 | `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. |
 | `--pc-witness-memory ADDRESS:LENGTH` | With `--pc-witness`, record byte bus reads and writes within the specified physical range. |

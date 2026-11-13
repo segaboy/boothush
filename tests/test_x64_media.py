@@ -55,31 +55,39 @@ def make_media():
     del boot
     for fat_lba in (FAT_START, FAT_START + 985):
         for cluster, value in enumerate((0x0ffffff8, 0x0fffffff, 0x0fffffff,
-                                         0x0fffffff, 0x0fffffff, 0x0fffffff)):
+                                         0x0fffffff, 0x0fffffff, 6, 7, 0x0fffffff)):
             struct.pack_into('<I', disk, fat_lba * SECTOR + cluster * 4, value)
     for cluster, name, attr, target, size in ((2, b'EFI        ', 0x10, 3, 0),
                                                (3, b'BOOT       ', 0x10, 4, 0),
-                                               (4, b'BOOTX64 EFI', 0x20, 5, 512)):
+                                               (4, b'BOOTX64 EFI', 0x20, 5, 1536)):
         offset = (DATA + cluster - 2) * SECTOR
         disk[offset:offset + 11] = name
         disk[offset + 11] = attr
         struct.pack_into('<H', disk, offset + 26, target)
         struct.pack_into('<I', disk, offset + 28, size)
-    efi = bytearray(512)
+    efi = bytearray(1536)
     efi[:2] = b'MZ'
     struct.pack_into('<I', efi, 0x3c, 0x80)
     efi[0x80:0x84] = b'PE\0\0'
-    struct.pack_into('<HH', efi, 0x84, 0x8664, 1)
+    struct.pack_into('<HH', efi, 0x84, 0x8664, 2)
     struct.pack_into('<H', efi, 0x94, 240)
     opt = 0x98
     struct.pack_into('<H', efi, opt, 0x20b)
     struct.pack_into('<I', efi, opt + 16, 0x1000)
-    struct.pack_into('<I', efi, opt + 56, 0x2000)
+    struct.pack_into('<Q', efi, opt + 24, 0x10000000)
+    struct.pack_into('<I', efi, opt + 56, 0x3000)
+    struct.pack_into('<I', efi, opt + 60, 0x200)
     struct.pack_into('<H', efi, opt + 68, 10)
+    struct.pack_into('<I', efi, opt + 108, 16)
+    struct.pack_into('<II', efi, opt + 112 + 5 * 8, 0x2000, 12)
     section = opt + 240
-    struct.pack_into('<IIII', efi, section + 8, 0x1000, 0x1000, 0x20, 0x1e0)
+    struct.pack_into('<IIII', efi, section + 8, 0x200, 0x1000, 0x200, 0x200)
     struct.pack_into('<I', efi, section + 36, 0x20000000)
-    disk[(DATA + 3) * SECTOR:(DATA + 4) * SECTOR] = efi
+    struct.pack_into('<IIII', efi, section + 40 + 8, 0x200, 0x2000, 0x200, 0x400)
+    efi[0x200] = 0xc3
+    struct.pack_into('<Q', efi, 0x220, 0x10000088)
+    struct.pack_into('<IIHH', efi, 0x400, 0x1000, 12, 0xa020, 0)
+    disk[(DATA + 3) * SECTOR:(DATA + 6) * SECTOR] = efi
     return disk, efi
 
 
@@ -104,6 +112,33 @@ class X64MediaTest(unittest.TestCase):
         result = subprocess.run([os.environ['BOOTHUSH_EXE'], '--verify-x64-media', str(disk), *map(str, args)],
                                 capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return result.returncode, json.loads(result.stdout)
+
+    def run_map(self, disk, base):
+        result = subprocess.run([os.environ['BOOTHUSH_EXE'], '--map-x64-media', str(disk), '--load-base', base],
+                                capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return result.returncode, json.loads(result.stdout)
+
+    def test_maps_synthetic_disk_and_rejects_bad_base(self):
+        code, result = self.run_map(self.disk, '0x20000000')
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['status'], 'image_mapped')
+        self.assertFalse(result['executed'])
+        self.assertEqual((result['preferred_base'], result['loaded_base'], result['entry_address'],
+                          result['image_size'], result['relocations']),
+                         (0x10000000, 0x20000000, 0x20001000, 0x3000, 1))
+        efi = self.efi.read_bytes()
+        expected = bytearray(0x3000)
+        expected[:0x200] = efi[:0x200]
+        expected[0x1000:0x1200] = efi[0x200:0x400]
+        expected[0x2000:0x2200] = efi[0x400:0x600]
+        struct.pack_into('<Q', expected, 0x1020, 0x20000088)
+        self.assertEqual(result['mapped_sha256'], hashlib.sha256(expected).hexdigest())
+        self.assertEqual(result['disk_sha256'], self.disk_hash)
+        self.assertEqual(result['efi_sha256'], self.efi_hash)
+        for bad in ('0x20000001', '-1', '0x10000000000000000'):
+            code, result = self.run_map(self.disk, bad)
+            self.assertEqual(code, 2, result)
+        self.assertEqual(hashlib.sha256(self.disk.read_bytes()).hexdigest(), self.disk_hash)
 
     def test_host_capability_does_not_claim_execution(self):
         result = subprocess.run([os.environ['BOOTHUSH_EXE'], '--x64-capability'], capture_output=True,
@@ -181,6 +216,29 @@ class X64MediaTest(unittest.TestCase):
         self.assertEqual(result['disk_sha256'], '80c279a69264cb07f2042bf14503c0687fa32e71057ee1196fc8174afbeeae4f')
         self.assertEqual(result['efi_sha256'], 'df284097539ed6b7c90700cb27589900b20d2e4c7574b7637ba5f387abba9fe9')
         self.assertFalse(result['executed'])
+
+    def test_classick_mapping_when_supplied(self):
+        disk, efi_path = os.environ.get('BOOTHUSH_CLASSICK_X64_DISK'), os.environ.get('BOOTHUSH_CLASSICK_X64_EFI')
+        if not disk or not efi_path:
+            self.skipTest('ClasSICK x64 disk and EFI not supplied')
+        efi = Path(efi_path).read_bytes()
+        self.assertEqual(hashlib.sha256(efi).hexdigest(), 'df284097539ed6b7c90700cb27589900b20d2e4c7574b7637ba5f387abba9fe9')
+        # Independent expected image for this pinned candidate's documented PE layout.
+        expected = bytearray(0x36000)
+        expected[:0x400] = efi[:0x400]
+        for va, raw, size in ((0x1000, 0x400, 0x2c400), (0x2e000, 0x2c800, 0x5e00),
+                              (0x34000, 0x32600, 0x200), (0x35000, 0x32800, 0x200)):
+            expected[va:va + size] = efi[raw:raw + size]
+        for offset in (0x2e030, 0x2e038, 0x2e040):
+            old = struct.unpack_from('<Q', expected, offset)[0]
+            struct.pack_into('<Q', expected, offset, (old + 0x10000000) & 0xffffffffffffffff)
+        code, result = self.run_map(disk, '0x20000000')
+        self.assertEqual(code, 0, result)
+        self.assertFalse(result['executed'])
+        self.assertEqual(result['relocations'], 3)
+        self.assertEqual(result['entry_address'], 0x200026f0)
+        self.assertEqual(result['mapped_sha256'], hashlib.sha256(expected).hexdigest())
+        self.assertEqual(result['disk_sha256'], '80c279a69264cb07f2042bf14503c0687fa32e71057ee1196fc8174afbeeae4f')
 
 
 if __name__ == '__main__':

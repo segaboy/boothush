@@ -6,6 +6,7 @@
 #include "Moira.h"
 
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -153,6 +154,8 @@ struct mac128k {
     size_t witness_count = 0;
     bool witness_detail = false;
     uint32_t witness_pending = 0;
+    uint32_t witness_ram_first = 0, witness_ram_length = 0;
+    uint64_t witness_ram_matched = 0, witness_ram_dropped = 0;
     boothush::Iwm iwm{};
     MacKeyboard keyboard{};
     MacRtc rtc{};
@@ -210,7 +213,7 @@ struct mac128k {
         witness[witness_count++] = {cycle, address, static_cast<uint8_t>(kind), reg, value,
                                     x.phase, y.phase, mouse_pressed, scc_pending(), latched,
                                     dcd, via_ifr(), interrupt_enable, irq_level,
-                                    cpu.getPC0(), 0, 0, witness_pending, 0, 0, 0};
+                                    cpu.getPC0(), 0, 0, witness_pending, 0, 0, 0, 0, 0, 0, 0, 0};
     }
 
     unsigned ca2_mode() const
@@ -552,9 +555,35 @@ struct mac128k {
             return;
         }
         if (uint8_t *bytes = writable_memory(address, size)) {
+            const uint32_t original = value;
             for (size_t i = size; i != 0; --i) {
                 bytes[i - 1] = static_cast<uint8_t>(value);
                 value >>= 8;
+            }
+            if (witness && witness_detail && witness_ram_length) {
+                const uint32_t offset = static_cast<uint32_t>(bytes - ram.data());
+                const uint32_t first = std::max(offset, witness_ram_first);
+                const uint32_t last = std::min(offset + static_cast<uint32_t>(size),
+                                               witness_ram_first + witness_ram_length);
+                const uint64_t cycle = static_cast<uint64_t>(cpu.getClock());
+                if (first < last && cycle >= witness_first && cycle <= witness_last) {
+                    ++witness_ram_matched;
+                    const size_t before = witness_count;
+                    observe(MAC128K_WITNESS_RAM_WRITE, cycle, address);
+                    if (witness_count == before) {
+                        ++witness_ram_dropped;
+                    } else {
+                        auto &event = witness[before];
+                        event.ram_offset = offset;
+                        event.width = static_cast<uint8_t>(size);
+                        event.captured_offset = static_cast<uint8_t>(first - offset);
+                        event.captured_width = static_cast<uint8_t>(last - first);
+                        const unsigned shift = 8 * (static_cast<unsigned>(size) - event.captured_offset - event.captured_width);
+                        const uint32_t mask = event.captured_width == 4 ? UINT32_MAX :
+                                              (UINT32_C(1) << (8 * event.captured_width)) - 1;
+                        event.captured_value = (original >> shift) & mask;
+                    }
+                }
             }
             return;
         }
@@ -705,6 +734,8 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
     machine->witness_last = last_cycle;
     machine->witness_count = 0;
     machine->witness_dropped = 0;
+    machine->witness_ram_first = machine->witness_ram_length = 0;
+    machine->witness_ram_matched = machine->witness_ram_dropped = 0;
     machine->observe(MAC128K_WITNESS_SNAPSHOT, static_cast<uint64_t>(machine->cpu.getClock()));
     return true;
 }
@@ -712,6 +743,22 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
 void mac128k_mouse_witness_detailed(mac128k *machine, bool enabled)
 {
     machine->witness_detail = enabled;
+}
+
+bool mac128k_mouse_witness_memory(mac128k *machine, uint32_t first, uint32_t length)
+{
+    if (!machine->witness || !machine->witness_detail || !length || first >= MAC128K_RAM_SIZE ||
+        length > MAC128K_RAM_SIZE - first) return false;
+    machine->witness_ram_first = first;
+    machine->witness_ram_length = length;
+    machine->witness_ram_matched = machine->witness_ram_dropped = 0;
+    return true;
+}
+
+void mac128k_mouse_witness_memory_stats(const mac128k *machine, uint64_t *matched, uint64_t *dropped)
+{
+    *matched = machine->witness_ram_matched;
+    *dropped = machine->witness_ram_dropped;
 }
 
 void mac128k_mouse_witness_pending(mac128k *machine, uint32_t pending)

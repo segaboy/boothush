@@ -17,6 +17,7 @@ enum mac128k_mouse_witness_kind {
     MAC128K_WITNESS_SAMPLE_ACCEPTED,
     MAC128K_WITNESS_SAMPLE_REJECTED,
     MAC128K_WITNESS_GUARD,
+    MAC128K_WITNESS_RAM_WRITE,
 };
 
 enum { MAC128K_MOUSE_WITNESS_CAPACITY = 65536 };
@@ -41,6 +42,8 @@ typedef struct {
     uint32_t pending;
     uint64_t due, deadline;
     uint8_t source;
+    uint32_t ram_offset, captured_value;
+    uint8_t width, captured_offset, captured_width;
 } mac128k_mouse_witness_event;
 
 #endif

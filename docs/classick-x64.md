@@ -19,6 +19,19 @@ This is a narrow preflight, not a comprehensive GPT, FAT or PE conformance check
 
 For the supplied original image, the checked disk SHA-256 is `80c279a69264cb07f2042bf14503c0687fa32e71057ee1196fc8174afbeeae4f` and the embedded and standalone EFI payload SHA-256 is `df284097539ed6b7c90700cb27589900b20d2e4c7574b7637ba5f387abba9fe9`. These identify that particular input, not every ClasSICK build. The test suite builds an independent synthetic GPT/FAT32/PE fixture and exercises corruption and mismatched files. Set `BOOTHUSH_CLASSICK_X64_DISK` and `BOOTHUSH_CLASSICK_X64_EFI` to these original local files to include the optional pinned-media test. Media and generated fixtures stay outside Git.
 
+## Map the disk's EFI image in host memory
+
+The next independently testable step constructs the actual disk payload's PE32+ image at a requested aligned base. It copies PE headers and sections, zero-fills the image, and applies supported base relocations. It remains a host-memory operation, with no CPU, firmware, guest memory, protection enforcement, or execution:
+
+```powershell
+& 'C:\Repos\boothush\out\windows\boothush.exe' --map-x64-media `
+  'C:\ClasSICK\pc-fast-drag-20261112-a\window-drawing.img' --load-base 0x20000000
+```
+
+The successful JSON has `status:image_mapped`, `source:gpt_fat32`, `executed:false`, input and mapped SHA-256 hashes, preferred and chosen bases, entry address, mapped image size and relocation count. The original candidate produced a 221,184-byte image with three relocations and SHA-256 `1511747e91c9533bd48d365d9e9a32fcf02ad1ea2d90c9177b0b1810874cf0e7` at `0x20000000`; the payload's original preferred base is `0x10000000`. The optional pinned-media test compares that hash with a separately constructed expected image. The map is discarded at process exit and input media is unchanged.
+
+The current narrow loader accepts a 4 KiB-aligned 64-bit load address, a bounded PE32+ x86-64 EFI application, nonoverlapping sections within the declared image and file, and `ABSOLUTE` padding plus `DIR64` base relocations. It rejects malformed or unsupported relocation records and moving an image without relocations. It does not perform imports, protocol resolution, TLS, exception registration, page-permission enforcement or entry invocation; mapping success is not proof a firmware implementation will boot the image. Synthetic tests exercise section copies, zero fill, relocation, bounds, unsupported types, overlap and unchanged output after failure.
+
 ## Remaining implementation
 
 The opt-in [PS/2 auxiliary controller component](ps2-auxiliary.md) now has synthetic tests for the ClasSICK startup commands, status routing, ordered mouse packets, keyboard interleaving and bounded queue handling. It is not connected to an x64 CPU, interrupt controller or CLI machine profile; these tests do not boot the supplied disk.

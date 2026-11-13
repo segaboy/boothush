@@ -14,15 +14,17 @@ foreach ($edge in 2048, 4096) {
   & $exe --machine mac128k --rom $rom --cycles 65000000 --timeout-ms 20000 `
     --mouse-dcd-invert 3 --mouse-motion 60000000:32:0 `
     --mouse-edge-cycles $edge --mouse-vbl-guard 4096 --inspect 0xb00:1024 `
-    --mouse-witness $witness --mouse-witness-detail 1 `
-    --mouse-witness-range 60000000:60500000
+    --mouse-witness $witness --mouse-witness-detail 1 --mouse-witness-memory 0xc1c:4 `
+    --mouse-witness-range 60000000:65000000
   Write-Output "Witness: $witness"
 }
 ```
 
 For this exact ROM, the big-endian 32-bit guest-owned pointer coordinates are at `0xc5c` and `0xc60`, and the guest omission counter is at `0xc1c` within the inspected range. These addresses are not general Mac interfaces. Replace the motion argument with `60000000:-32:0`, `60000000:0:32`, or `60000000:0:-32` to trace the other directions. The optional `BOOTHUSH_CLASSICK_LIVE_ROM` test covers all four at both intervals.
 
-In the reproduced +X case, the 2,048-cycle trace shows the X phase at 2 when SCC interrupt level 2 became pending at cycle 60,006,236; the X phase changed to 0 at 60,008,286 while SCC pending remained set; the CPU accepted level 2 at 60,008,554. The 4,096-cycle case reached the expected final position and the 2,048-cycle case ended one pixel left with 29 guest-reported omitted passes. Both delivered 64 modeled transitions and ended with zero pending. In separate paired runs, enabling the witness left the stopped guest JSON and full framebuffer identical. These observations support investigating the relationship between a latched SCC signal and a later VIA read; they do not establish whether the guest, emulator, or their interaction is defective. A useful next test is to correlate per-pass guest-owned diagnostic writes with the SCC latch/acknowledgement and VIA sampling, then compare behavior under a separately validated timing model.
+In the reproduced +X case, the 2,048-cycle trace shows the X phase at 2 when SCC interrupt level 2 became pending at cycle 60,006,236; the X phase changed to 0 at 60,008,286 while SCC pending remained set; the CPU accepted level 2 at 60,008,554. The 4,096-cycle case reached the expected final position and the 2,048-cycle case ended one pixel left with 29 guest-reported omitted passes. Both delivered 64 modeled transitions and ended with zero pending. In separate paired runs, enabling the RAM witness left the stopped guest JSON and full framebuffer identical. The 2,048-cycle trace retained 1,263 rows, including 74 overlapping RAM writes, and the 4,096-cycle trace retained 1,316 rows, including 72 overlapping RAM writes; neither dropped rows in the 60,000,000–65,000,000 range. The first observed low-word write of 29 to `0xc1e` occurred at cycle 60,147,638 in that fast case; the slow case's observed low-word writes were zero. These are separate 16-bit bus writes to a big-endian longword, not an atomic trace sample of the full value.
+
+For the source revision previously associated with the supplied ROM (`0f8d85d`), `platform/mac128k/window-entry.c` copies `motion.motion_drops` into `cs_mac_motion_drop_trace[1]` in its foreground observer; `platform/mac128k/motion.c` increments the internal counter in `drop()`. Thus the filtered `0xc1c` writes are **published copies**, not direct observations of the individual omission decisions. The two cases correlate those copies with device events but do not establish which implementation is responsible. A next discriminating test is to identify the internal counter's address for this exact ROM from its own build map, then trace its writes alongside SCC and VIA events; a separately validated timing model would still be needed to assess hardware fidelity.
 
 ## Format and limits
 
@@ -49,3 +51,17 @@ Kinds include `snapshot`, `input_due`, `sample_accepted`, `sample_rejected`, `gu
 `guard` reports a nominal `due` and later guarded `deadline` for a queued transition; it can also report a CPU boundary that crossed into the guard. Repeated identical notices may be coalesced. `irq` is a modeled CPU interrupt-level change; `irq_accept` is the CPU callback when it begins accepting an interrupt, with the accepted level in `value`. SCC acknowledgement is visible as the applicable `scc_write`, not implied by CPU acceptance. Bus rows carry the mapped `address`, register and returned or written `value`. Device snapshots are taken after their event: an IRQ row can precede the corresponding `phase` row at the same cycle because changing the phase updates IRQ before the phase observation is appended.
 
 Recordings contain accepted samples and timing settings; replay source rows are labelled 3. Repeatability requires the same ROM, media, emulator build, inputs and settings, and a comparable stop condition. Timeouts, additional scheduled input and different builds can change results. Matching replay demonstrates reproduction in BootHush only. Trace output fails if its new path cannot be created; the process result reports that failure.
+
+## Filtered guest RAM writes
+
+`--mouse-witness-memory ADDRESS:LENGTH` requires `--mouse-witness` and `--mouse-witness-detail 1`. It selects `BHMACMOUSE3` only for that request; `BHMACMOUSE1` and `BHMACMOUSE2` remain unchanged otherwise. The single byte range is in physical RAM offsets from `0` through `0x1ffff`, with positive length and an exclusive end no greater than `0x20000`. Invalid or repeated options fail before running. It observes CPU writes that successfully reach RAM; it neither reads MMIO nor adds guest reads or writes. The startup RAM overlay at bus `0x600000` maps to the same physical offsets as low RAM. Each event carries its actual CPU bus `address` and a separate `ram_offset` so aliases can be distinguished.
+
+The header extends the V2 fields with the selected `RAM_FIRST RAM_LENGTH`, followed by `RAM_MATCHED RAM_DROPPED`:
+
+```text
+BHMACMOUSE3 FIRST LAST STOP COUNT DROPPED NO_DROPS RANGE_REACHED EDGE GUARD INVERT RAM_FIRST RAM_LENGTH RAM_MATCHED RAM_DROPPED
+```
+
+`RAM_MATCHED` counts RAM write transactions overlapping the address and cycle ranges, including dropped rows. `RAM_DROPPED` counts how many of those could not fit in the shared 65,536-row buffer; it is a subset of total `DROPPED`. Values outside either filter are intentionally excluded, not dropped. `NO_DROPS` and `RANGE_REACHED` have the V2 meanings; neither establishes that scheduled inputs were delivered at an exact stop boundary. At an early fault or stop, inspect the process status and `STOP` as well.
+
+Every V3 row adds `ram_offset width captured_offset captured_width captured_value`; these fields are zero for non-RAM events. A `ram_write` is emitted **after** the modeled write. `width` is the observed bus-access width in bytes, and `captured_offset` is the offset within that access of the first byte inside the filter. `captured_width` is the number of overlapping bytes; `captured_value` is their unsigned big-endian value in decimal. Only overlapping bytes are reported, even when a transaction also touches RAM outside the filter. For a 68000, Moira normally presents a longword write as two ordered 16-bit writes. Consequently, reconstructing a 32-bit value requires both writes and care about intervening events; it is not guaranteed to be an atomic observation. `pc` is the existing instruction-context value, and event sequence resolves equal-cycle order. Captured writes are guest RAM activity, not proof of the meaning of any guest variable without the matching guest source and layout.

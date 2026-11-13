@@ -10,13 +10,15 @@ Every guest run requires `--machine`, `--cycles`, and `--timeout-ms`. Each guest
 
 BootHush does not yet boot or execute the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. See [x64 enablement](classick-x64.md) for an exact command, supported media, results, and remaining work.
 
+The separate `--map-x64-media` command now builds and relocates the disk's actual EFI image in host memory, with independently tested mapping bytes and explicit `executed:false`. It does not create a virtual machine or run firmware.
+
 An independently tested, opt-in [PS/2 auxiliary controller model](ps2-auxiliary.md) covers the current ClasSICK startup exchange and mouse reports. It is a device component, not a connected x64 machine or a guest execution test.
 
 An independent x64 page-allocation and memory-map-key state model has synthetic stale-key and exit tests. It is not yet callable by an EFI guest; see the [x64 notes](classick-x64.md).
 
 ## Correlate the Mac mouse timing
 
-The opt-in `--mouse-witness-detail 1` extends the existing bounded witness with scheduled and accepted input, pending transitions, guard deadlines, CPU interrupt acceptance and instruction context. It retains the existing witness by default and works headlessly with record/replay. See the [correlated mouse witness guide](mac-mouse-witness.md) for exact 2,048- and 4,096-cycle commands, field definitions and limits. A transition while an SCC interrupt is pending is an observation in this model, not a diagnosis or physical-hardware timing result.
+The opt-in `--mouse-witness-detail 1` extends the existing bounded witness with scheduled and accepted input, pending transitions, guard deadlines, CPU interrupt acceptance and instruction context. Add `--mouse-witness-memory ADDRESS:LENGTH` to include filtered guest RAM writes in the same ordered stream. It retains the existing witness by default and works headlessly with record/replay. See the [correlated mouse witness guide](mac-mouse-witness.md) for exact 2,048- and 4,096-cycle commands, field definitions and limits. A transition while an SCC interrupt is pending is an observation in this model, not a diagnosis or physical-hardware timing result.
 
 ## Inspect several regions at one stop
 

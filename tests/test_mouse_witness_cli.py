@@ -161,6 +161,104 @@ class MacMouseWitnessCliTests(BootHushTestCase):
         self.assertEqual([row["cycle"] for row in rows], sorted(row["cycle"] for row in rows))
         return meta, rows
 
+    def read_memory_detail(self, path):
+        header, fields, *lines = path.read_text(encoding="ascii").splitlines()
+        magic, *meta = header.split()
+        self.assertEqual(magic, "BHMACMOUSE3")
+        meta = list(map(int, meta))
+        self.assertEqual(len(meta), 14)
+        names = fields.split()
+        rows = []
+        for line in lines:
+            values = line.split()
+            self.assertEqual(len(values), len(names))
+            rows.append({name: value if name == "kind" else int(value)
+                         for name, value in zip(names, values)})
+        self.assertEqual(len(rows), meta[3])
+        self.assertEqual([row["seq"] for row in rows], list(range(len(rows))))
+        self.assertEqual([row["cycle"] for row in rows], sorted(row["cycle"] for row in rows))
+        return meta, rows
+
+    def test_memory_witness_alias_partial_writes_and_no_side_effects(self):
+        program = (
+            struct.pack(">HHI", 0x33fc, 0xabcd, 0x600b02)  # Overlay RAM alias.
+            + write_byte(0xEFFFFE, 0) + write_byte(0xEFE7FE, 0x10)
+            + write_byte(0xb00, 0xaa)
+            + struct.pack(">HHI", 0x33fc, 0x1234, 0xb02)
+            + struct.pack(">HHHI", 0x23fc, 0x89ab, 0xcdef, 0xb04)
+            + write_byte(0xb08, 0x55) + bytes.fromhex("60fe")
+        )
+        self.rom.write_bytes(make_rom(program))
+        witness = self.scratch / "ram.txt"
+        frame_a, frame_b = self.scratch / "plain.pbm", self.scratch / "trace.pbm"
+        args = ("--mouse-phase", "0:0:2", "--inspect", "0xb00:9")
+        plain = self.boot(*args, "--frame", frame_a, cycles=3000)
+        traced = self.boot(*args, "--frame", frame_b, "--mouse-witness", witness,
+                           "--mouse-witness-detail", "1", "--mouse-witness-memory", "0xb03:4", cycles=3000)
+        self.assertEqual(traced, plain)
+        self.assertEqual(frame_a.read_bytes(), frame_b.read_bytes())
+        meta, rows = self.read_memory_detail(witness)
+        self.assertEqual(meta[10:], [0xb03, 4, 4, 0])
+        self.assertTrue(any(row["kind"] == "phase" for row in rows))
+        writes = [r for r in rows if r["kind"] == "ram_write"]
+        self.assertEqual([(r["address"], r["ram_offset"], r["width"], r["captured_offset"],
+                           r["captured_width"], r["captured_value"]) for r in writes], [
+                           (0x600b02, 0xb02, 2, 1, 1, 0xcd),
+                           (0xb02, 0xb02, 2, 1, 1, 0x34),
+                           (0xb04, 0xb04, 2, 0, 2, 0x89ab),
+                           (0xb06, 0xb06, 2, 0, 1, 0xcd)])
+        self.assertTrue(all(r["pc"] != 0 for r in writes))
+
+    def test_memory_witness_limits_filters_and_drops(self):
+        for value in ("0:0", "0x20000:1", "0x1ffff:2", "0xffffffff:4", "0xb00:"):
+            witness = self.scratch / "unused-ram.txt"
+            result = self.boot("--mouse-witness", witness, "--mouse-witness-detail", "1",
+                               "--mouse-witness-memory", value, exit_code=2)
+            self.assertIn("mouse-witness-memory", result["error"])
+            self.assertFalse(witness.exists())
+        for args in (("--mouse-witness-memory", "0:1"),
+                     ("--mouse-witness", self.scratch / "unused.txt", "--mouse-witness-memory", "0:1")):
+            self.assertEqual(self.boot(*args, exit_code=2)["status"], "error")
+
+        self.rom.write_bytes(make_rom(write_byte(0xEFFFFE, 0) + write_byte(0xEFE7FE, 0x10) +
+                                     write_byte(0xb00, 0xaa) + bytes.fromhex("60f6")))
+        path = self.scratch / "overflow-ram.txt"
+        self.boot("--mouse-witness", path, "--mouse-witness-detail", "1", "--mouse-witness-memory", "0xb00:1",
+                  cycles=3000000, timeout_ms=20000)
+        meta, rows = self.read_memory_detail(path)
+        self.assertEqual(meta[3], 65536)
+        self.assertGreater(meta[4], 0)
+        self.assertGreater(meta[13], 0)
+        self.assertEqual(meta[12], len([r for r in rows if r["kind"] == "ram_write"]) + meta[13])
+        self.assertLessEqual(meta[13], meta[4])
+        narrow = self.scratch / "narrow-ram.txt"
+        self.boot("--mouse-witness", narrow, "--mouse-witness-detail", "1", "--mouse-witness-memory", "0xb00:1",
+                  "--mouse-witness-range", "1000:2000", cycles=3000000, timeout_ms=20000)
+        meta, rows = self.read_memory_detail(narrow)
+        self.assertEqual(meta[4], 0)
+        self.assertEqual(meta[13], 0)
+        self.assertTrue(all(1000 <= r["cycle"] <= 2000 for r in rows))
+
+    def test_memory_witness_with_mouse_record_and_replay(self):
+        record = self.scratch / "ram-replay.bhmouse"
+        witness1, witness2 = self.scratch / "record-ram.txt", self.scratch / "replay-ram.txt"
+        frame1, frame2 = self.scratch / "record.pbm", self.scratch / "replay.pbm"
+        first = self.boot("--mouse-motion", "300:1:0", "--mouse-edge-cycles", "100",
+                          "--mouse-vbl-guard", "0", "--mouse-record", record,
+                          "--inspect", "0xb00:4", "--frame", frame1, "--mouse-witness", witness1,
+                          "--mouse-witness-detail", "1", "--mouse-witness-memory", "0xb00:4")
+        second = self.boot("--mouse-replay", record, "--inspect", "0xb00:4", "--frame", frame2,
+                           "--mouse-witness", witness2, "--mouse-witness-detail", "1",
+                           "--mouse-witness-memory", "0xb00:4")
+        self.assertEqual(first, second)
+        self.assertEqual(frame1.read_bytes(), frame2.read_bytes())
+        _, rows1 = self.read_memory_detail(witness1)
+        _, rows2 = self.read_memory_detail(witness2)
+        keys = ("cycle", "pc", "ram_offset", "width", "captured_offset", "captured_width", "captured_value")
+        writes = lambda rows: [tuple(row[key] for key in keys) for row in rows if row["kind"] == "ram_write"]
+        self.assertTrue(writes(rows1))
+        self.assertEqual(writes(rows1), writes(rows2))
+
     def test_detail_sequence_replay_and_observer_invariance(self):
         trace = self.scratch / "record.bhmouse"
         detail = self.scratch / "detail.txt"
@@ -220,6 +318,42 @@ class MacMouseWitnessCliTests(BootHushTestCase):
         meta, rows = self.read_detail(early)
         self.assertEqual(meta[3:7], [0, 0, 1, 0])
         self.assertEqual(rows, [])
+
+    @unittest.skipUnless(os.environ.get("BOOTHUSH_CLASSICK_LIVE_ROM"), "ClasSICK live ROM not supplied")
+    def test_classick_correlated_omission_publication(self):
+        rom = Path(os.environ["BOOTHUSH_CLASSICK_LIVE_ROM"])
+        self.assertEqual(hashlib.sha256(rom.read_bytes()).hexdigest(),
+                         "faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c")
+        for edge, pointer, omissions in ((2048, 255, 29), (4096, 288, 0)):
+            with self.subTest(edge=edge):
+                common = ("--mouse-dcd-invert", "3", "--mouse-edge-cycles", str(edge),
+                          "--mouse-vbl-guard", "4096", "--mouse-motion", "60000000:32:0",
+                          "--inspect", "0xb00:1024")
+                frame1 = self.scratch / f"plain-{edge}.pbm"
+                frame2 = self.scratch / f"witness-{edge}.pbm"
+                witness = self.scratch / f"memory-{edge}.txt"
+                plain = self.boot(*common, "--frame", frame1, rom=rom, cycles=65000000, timeout_ms=20000)
+                traced = self.boot(*common, "--frame", frame2, "--mouse-witness", witness,
+                    "--mouse-witness-detail", "1", "--mouse-witness-memory", "0xc1c:4",
+                    "--mouse-witness-range", "60000000:65000000", rom=rom, cycles=65000000, timeout_ms=20000)
+                self.assertEqual(traced, plain)
+                self.assertEqual(frame1.read_bytes(), frame2.read_bytes())
+                data = bytes.fromhex(traced["memory"]["bytes"])
+                def word(address):
+                    return int.from_bytes(data[address - 0xb00:address - 0xb00 + 4], "big")
+                self.assertEqual((word(0xc5c), word(0xc60), word(0xc1c)), (pointer, 171, omissions))
+                self.assertEqual(traced["mouse"], {"samples": 1, "steps": 64, "pending": 0})
+                meta, rows = self.read_memory_detail(witness)
+                writes = [r for r in rows if r["kind"] == "ram_write"]
+                self.assertEqual(meta[4:7], [0, 1, 1])
+                self.assertEqual(meta[10:12], [0xc1c, 4])
+                self.assertEqual(meta[12:], [len(writes), 0])
+                self.assertGreater(len(writes), 0)
+                self.assertTrue(any(r["kind"] == "phase" for r in rows))
+                low_values = [r["captured_value"] for r in writes if r["ram_offset"] == 0xc1e]
+                self.assertIn(omissions, low_values)
+                if edge == 4096:
+                    self.assertTrue(all(value == 0 for value in low_values))
 
     @unittest.skipUnless(os.environ.get("BOOTHUSH_CLASSICK_LIVE_ROM"), "ClasSICK live ROM not supplied")
     def test_classick_four_direction_timing_witness(self):

@@ -6,12 +6,15 @@
 #include <bcrypt.h>
 
 #include "x64_media.h"
+#include "x64_media_internal.h"
+#include "x64_pe_loader.h"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -143,8 +146,8 @@ bool valid_efi(const std::vector<uint8_t> &file, uint32_t &entry)
 }
 } // namespace
 
-const char *x64_media_verify(const uint8_t *image, size_t size, const uint8_t *expected_efi,
-                             size_t expected_size, x64_media_info *info)
+static const char *verify_media(const uint8_t *image, size_t size, const uint8_t *expected_efi,
+                                size_t expected_size, x64_media_info *info, std::vector<uint8_t> *extracted)
 {
     if (!image || !info || size != image_size) return "x64 disk must be a 67108864-byte raw image";
     try {
@@ -207,8 +210,37 @@ const char *x64_media_verify(const uint8_t *image, size_t size, const uint8_t *e
         info->partition_sectors = static_cast<uint32_t>(end - first + 1);
         info->efi_size = file_size;
         info->entry_rva = entry;
+        if (extracted) *extracted = std::move(efi);
         return nullptr;
     } catch (const std::bad_alloc &) {
         return "cannot allocate x64 media inspection buffers";
     }
+}
+
+const char *x64_media_verify(const uint8_t *image, size_t size, const uint8_t *expected_efi,
+                             size_t expected_size, x64_media_info *info)
+{
+    return verify_media(image, size, expected_efi, expected_size, info, nullptr);
+}
+
+const char *x64_media_extract_efi(const uint8_t *image, size_t size,
+                                  x64_media_info &info, std::vector<uint8_t> &efi)
+{
+    return verify_media(image, size, nullptr, 0, &info, &efi);
+}
+
+const char *x64_media_map(const uint8_t *image, size_t size, uint64_t base, x64_mapped_media_info *info)
+{
+    if (!info) return "missing mapped image result";
+    x64_mapped_media_info result{};
+    std::vector<uint8_t> efi;
+    if (const char *error = x64_media_extract_efi(image, size, result.media, efi)) return error;
+    X64PeImage mapped;
+    if (const char *error = mapped.load(efi, base)) return error;
+    if (!hash_bytes(mapped.bytes().data(), mapped.bytes().size(), result.mapped_sha256)) return "cannot calculate SHA-256";
+    result.preferred_base = mapped.preferred_base(); result.loaded_base = mapped.loaded_base();
+    result.entry_address = mapped.entry_address(); result.image_size = static_cast<uint32_t>(mapped.bytes().size());
+    result.relocations = mapped.relocations();
+    *info = result;
+    return nullptr;
 }
