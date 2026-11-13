@@ -14,6 +14,7 @@ public:
     Ega();
 
     bool set_bios_mode(std::uint8_t mode);
+    void set_text_font(const std::uint8_t font[256 * 14]);
     void set_cycles(std::uint64_t cycles);
 
     bool handles_port(std::uint16_t port) const;
@@ -38,6 +39,8 @@ private:
     std::array<std::uint8_t, 9> graphics_{};
     std::array<std::uint8_t, 0x19> crtc_{};
     std::array<std::uint8_t, 0x14> attribute_{};
+    std::array<std::uint8_t, 256 * 14> text_font_{};
+    bool has_text_font_ = false;
     std::uint8_t misc_output_ = 0;
     std::uint8_t sequencer_index_ = 0;
     std::uint8_t graphics_index_ = 0;

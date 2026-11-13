@@ -16,6 +16,8 @@
 
 enum {
     MAX_INSPECT_BYTES = 4096,
+    MAX_INSPECT_RANGES = 16,
+    MAX_INSPECT_TOTAL = 16384,
     MAX_INPUT_EVENTS = 1024,
     MAX_TIMEOUT_MS = 3600000,
     CYCLE_SLICE = 256,
@@ -54,15 +56,23 @@ struct request {
     const wchar_t *disk_path;
     const wchar_t *disk_out_path;
     const wchar_t *ega_rom_path;
+    const wchar_t *ega_font_path;
     const wchar_t *frame_path;
     const wchar_t *cancel_event;
     const wchar_t *mouse_record_path;
     const wchar_t *mouse_replay_path;
     const wchar_t *mouse_witness_path;
+    const wchar_t *pc_witness_path;
     uint32_t cycle_limit;
     uint32_t timeout_ms;
     struct predicate until;
-    struct inspection inspect;
+    struct predicate input_after;
+    struct inspection pc_witness_memory, pc_witness_io;
+    uint32_t pc_witness_first, pc_witness_last;
+    bool pc_witness_cycles_set;
+    struct inspection inspect[MAX_INSPECT_RANGES];
+    size_t inspect_count;
+    uint32_t inspect_total;
     bool stop_at_pc;
     uint32_t target_pc;
     bool stop_at_post;
@@ -102,6 +112,11 @@ struct mouse_session {
     uint64_t accepted;
     uint64_t emitted;
     bool injected_window;
+    bool readiness_requested;
+    bool ready;
+    uint64_t ready_cycle;
+    size_t scheduled;
+    size_t scheduled_accepted;
 };
 
 struct machine_state {
@@ -293,6 +308,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->disk_out_path = value;
         } else if (wcscmp(option, L"--ega-rom") == 0 && request->ega_rom_path == NULL) {
             request->ega_rom_path = value;
+        } else if (wcscmp(option, L"--ega-font") == 0 && request->ega_font_path == NULL) {
+            request->ega_font_path = value;
         } else if (wcscmp(option, L"--frame") == 0 && request->frame_path == NULL) {
             request->frame_path = value;
         } else if (wcscmp(option, L"--cancel-event") == 0 && request->cancel_event == NULL) {
@@ -308,6 +325,21 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_replay_path = value;
         } else if (wcscmp(option, L"--mouse-witness") == 0 && request->mouse_witness_path == NULL) {
             request->mouse_witness_path = value;
+        } else if (wcscmp(option, L"--pc-witness") == 0 && request->pc_witness_path == NULL) {
+            request->pc_witness_path = value;
+        } else if (wcscmp(option, L"--pc-witness-memory") == 0 && !request->pc_witness_memory.length) {
+            if (!parse_fields(value, fields, 2) || fields[1] == 0 || fields[0] >= 0x1000000 || fields[1] > 0x1000000 - fields[0])
+                return "pc-witness-memory requires a valid 24-bit address:length";
+            request->pc_witness_memory = (struct inspection){fields[0], fields[1]};
+        } else if (wcscmp(option, L"--pc-witness-io") == 0 && !request->pc_witness_io.length) {
+            if (!parse_fields(value, fields, 2) || fields[1] == 0 || fields[0] >= 0x10000 || fields[1] > 0x10000 - fields[0])
+                return "pc-witness-io requires a valid 16-bit port:length";
+            request->pc_witness_io = (struct inspection){fields[0], fields[1]};
+        } else if (wcscmp(option, L"--pc-witness-cycles") == 0 && !request->pc_witness_cycles_set) {
+            if (!parse_fields(value, fields, 2) || fields[0] > fields[1] || fields[1] > MAX_CYCLES)
+                return "pc-witness-cycles requires ordered first:last cycles";
+            request->pc_witness_cycles_set = true;
+            request->pc_witness_first = fields[0]; request->pc_witness_last = fields[1];
         } else if (wcscmp(option, L"--mouse-witness-range") == 0 && !request->mouse_witness_range_set) {
             if (!parse_fields(value, fields, 2) || fields[0] > fields[1] || fields[1] > MAX_CYCLES) {
                 return "mouse-witness-range requires ordered first:last cycles from 0 to 4000000000";
@@ -373,6 +405,13 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
                 return "until requires a RAM address, width 1, 2, or 4, and a fitting value";
             }
             request->until = (struct predicate){fields[0], fields[1], fields[2]};
+        } else if (wcscmp(option, L"--input-after") == 0 && request->input_after.width == 0) {
+            if (!parse_fields(value, fields, 3) ||
+                (fields[1] != 1 && fields[1] != 2 && fields[1] != 4) ||
+                (fields[1] < 4 && fields[2] >= (UINT32_C(1) << (fields[1] * 8)))) {
+                return "input-after requires a RAM address, width 1, 2, or 4, and a fitting value";
+            }
+            request->input_after = (struct predicate){fields[0], fields[1], fields[2]};
         } else if (wcscmp(option, L"--until-pc") == 0 && !request->stop_at_pc) {
             if (!parse_fields(value, fields, 1) || fields[0] > 0xffffff) {
                 return "until-pc requires a 24-bit address";
@@ -385,12 +424,14 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
             request->stop_at_post = true;
             request->target_post = fields[0];
-        } else if (wcscmp(option, L"--inspect") == 0 && request->inspect.length == 0) {
+        } else if (wcscmp(option, L"--inspect") == 0) {
             if (!parse_fields(value, fields, 2) || fields[1] == 0 ||
-                fields[1] > MAX_INSPECT_BYTES) {
-                return "inspect requires a RAM address and a length between 1 and 4096";
+                fields[1] > MAX_INSPECT_BYTES || request->inspect_count == MAX_INSPECT_RANGES ||
+                fields[1] > MAX_INSPECT_TOTAL - request->inspect_total) {
+                return "inspect requires 1 to 4096 bytes, up to 16 ranges and 16384 total bytes";
             }
-            request->inspect = (struct inspection){fields[0], fields[1]};
+            request->inspect[request->inspect_count++] = (struct inspection){fields[0], fields[1]};
+            request->inspect_total += fields[1];
         } else {
             return "unknown or repeated option";
         }
@@ -417,6 +458,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->mouse_witness_path != NULL && request->machine != MACHINE_MAC128K) {
         return "mouse-witness requires mac128k";
     }
+    if (request->pc_witness_path != NULL && request->machine != MACHINE_PC286) return "pc-witness requires pc286";
+    if (!request->pc_witness_path && (request->pc_witness_memory.length || request->pc_witness_io.length || request->pc_witness_cycles_set))
+        return "pc-witness filters require pc-witness";
+    if (!request->pc_witness_cycles_set) request->pc_witness_last = request->cycle_limit;
     if (request->mouse_witness_range_set && request->mouse_witness_path == NULL) {
         return "mouse-witness-range requires mouse-witness";
     }
@@ -426,8 +471,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->raw_mouse_phases && mouse_bridge) {
         return "raw mouse phases cannot be mixed with relative motion, replay or live input";
     }
-    if (request->mouse_record_path != NULL && request->live_scale == 0 && !request->window_input) {
-        return "mouse-record requires live input or window-mouse";
+    if (request->mouse_record_path != NULL && request->live_scale == 0 && !request->window_input && !request->relative_motion) {
+        return "mouse-record requires live input, relative motion or window-mouse";
     }
     if (request->mouse_replay_path != NULL &&
         (request->live_scale || mouse_settings)) {
@@ -439,11 +484,14 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->window_input && (request->live_scale || request->relative_motion || request->mouse_replay_path)) {
         return "window-mouse cannot be mixed with live, relative motion or replay";
     }
+    if (request->input_after.width && (!request->input_event_count || request->live_scale || request->mouse_replay_path)) {
+        return "input-after requires scheduled input without live input or replay";
+    }
     if (request->machine == MACHINE_MAC128K) {
         if (request->rom_path == NULL) {
             return "mac128k requires a ROM";
         }
-        if (request->stop_at_post || request->disk_path || request->disk_out_path || request->ega_rom_path) {
+        if (request->stop_at_post || request->disk_path || request->disk_out_path || request->ega_rom_path || request->ega_font_path) {
             return "POST, hard disk, disk output, and EGA ROM options require pc286";
         }
     } else {
@@ -468,8 +516,13 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     }
     const uint32_t ram_size = request->machine == MACHINE_MAC128K ? MAC128K_RAM_SIZE : PC286_VIDEO_END;
     if ((request->until.width && request->until.address > ram_size - request->until.width) ||
-        (request->inspect.length && request->inspect.address > ram_size - request->inspect.length)) {
+        (request->input_after.width && request->input_after.address > ram_size - request->input_after.width)) {
         return "requested memory is outside physical RAM and video memory";
+    }
+    for (size_t index = 0; index < request->inspect_count; ++index) {
+        if (request->inspect[index].address > ram_size - request->inspect[index].length) {
+            return "requested memory is outside physical RAM and video memory";
+        }
     }
     return NULL;
 }
@@ -572,8 +625,32 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
     return written;
 }
 
+static bool write_pc_witness(const pc286 *pc, const struct request *request, uint64_t stop)
+{
+    static const char *const kinds[] = {"step", "read", "write", "in", "out", "irq", "exception"};
+    size_t count;
+    uint64_t dropped;
+    const pc286_witness_event *events = pc286_witness(pc, &count, &dropped);
+    const size_t capacity = (count + 2) * 128;
+    char *buffer = malloc(capacity);
+    if (!buffer) return false;
+    size_t length = (size_t)snprintf(buffer, capacity, "BHPC286W1 %" PRIu64 " %zu %" PRIu64 "\ncycle cs ip pc kind address value width\n", stop, count, dropped);
+    for (size_t index = 0; index < count && length < capacity; ++index) {
+        const pc286_witness_event *event = &events[index];
+        length += (size_t)snprintf(buffer + length, capacity - length,
+            "%" PRIu64 " %u %u %" PRIu32 " %s %" PRIu32 " %" PRIu32 " %u\n",
+            event->cycle, (unsigned)event->cs, (unsigned)event->ip, event->pc,
+            kinds[event->kind], event->address, event->value, (unsigned)event->width);
+    }
+    const bool written = length < capacity && write_new_file(request->pc_witness_path, NULL, 0, (const uint8_t *)buffer, (DWORD)length);
+    free(buffer);
+    return written;
+}
+
 static const char *open_mouse_session(struct mouse_session *mouse, const struct request *request)
 {
+    mouse->readiness_requested = request->input_after.width != 0;
+    mouse->scheduled = request->input_event_count;
     if (!request->live_scale && !request->relative_motion && !request->mouse_replay_path && !request->window_input) {
         return NULL;
     }
@@ -689,7 +766,7 @@ static bool matches(const struct machine *machine, struct predicate until)
 
 static void print_result(const char *status, enum machine_kind machine,
                          struct machine_state state, const char *error,
-                         const uint8_t *bytes, struct inspection inspect,
+                         const uint8_t *bytes, const struct inspection *inspect, size_t inspect_count,
                          const struct mouse_session *mouse)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
@@ -720,12 +797,23 @@ static void print_result(const char *status, enum machine_kind machine,
             fputs(",\"input_source\":\"injected_window_messages\"", stdout);
         }
     }
-    if (bytes != NULL && inspect.length != 0) {
-        printf(",\"memory\":{\"address\":%" PRIu32 ",\"bytes\":\"", inspect.address);
-        for (uint32_t index = 0; index < inspect.length; ++index) {
-            printf("%02x", (unsigned)bytes[index]);
+    if (mouse != NULL && mouse->readiness_requested) {
+        printf(",\"input_schedule\":{\"ready\":%s", mouse->ready ? "true" : "false");
+        if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
+        printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
+    }
+    if (bytes != NULL && inspect_count != 0) {
+        fputs(inspect_count == 1 ? ",\"memory\":" : ",\"memory_ranges\":[", stdout);
+        size_t offset = 0;
+        for (size_t range = 0; range < inspect_count; ++range) {
+            if (range != 0) { putchar(','); }
+            printf("{\"address\":%" PRIu32 ",\"bytes\":\"", inspect[range].address);
+            for (uint32_t index = 0; index < inspect[range].length; ++index) {
+                printf("%02x", (unsigned)bytes[offset++]);
+            }
+            fputs("\"}", stdout);
         }
-        fputs("\"}", stdout);
+        if (inspect_count > 1) { putchar(']'); }
     }
     fputs("}\n", stdout);
 }
@@ -733,7 +821,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 (struct inspection){0}, NULL);
+                 NULL, 0, NULL);
     return 2;
 }
 
@@ -870,6 +958,10 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         if ((double)elapsed >= timeout_ticks) {
             return (struct run_result){"timeout", NULL, 1};
         }
+        if (mouse->readiness_requested && !mouse->ready && matches(machine, request->input_after)) {
+            mouse->ready = true;
+            mouse->ready_cycle = state.cycles;
+        }
         if ((request->stop_at_pc && state.pc == request->target_pc) ||
             (request->stop_at_post && state.post_written && state.post == request->target_post) ||
             matches(machine, request->until)) {
@@ -883,6 +975,9 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             // running the guest again. Reproduce its queued, unapplied work.
             if (reaches_recorded_end && !enqueue_replay_samples(mouse, cycle_limit)) {
                 return (struct run_result){"input_overflow", "mouse replay queue is full", 1};
+            }
+            if (mouse->readiness_requested && !mouse->ready) {
+                return (struct run_result){"readiness_not_reached", NULL, 1};
             }
             return (struct run_result){"cycle_limit", NULL, use_predicate ? 1 : 0};
         }
@@ -910,7 +1005,8 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         }
 
         while (next_event < request->input_event_count &&
-               request->input_events[next_event].cycle <= state.cycles) {
+               (!mouse->readiness_requested || mouse->ready) &&
+               (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle <= state.cycles) {
             const struct input_event event = request->input_events[next_event];
             if (!apply_input(machine, mouse, event, state.cycles)) {
                 if (event.kind == INPUT_WINDOW) {
@@ -922,6 +1018,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                 return (struct run_result){"machine_fault", "guest keyboard rejected an input event", 1};
             }
             ++next_event;
+            mouse->scheduled_accepted = next_event;
             if (machine->pc != NULL && next_event == request->input_event_count) {
                 pc286_expect_input(machine->pc, false);
             }
@@ -946,9 +1043,10 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         slice = slice_before(slice, previous_cycles, cycle_limit);
         slice = slice_before(slice, previous_cycles, live_target);
         slice = slice_before(slice, previous_cycles, mouse_deadline);
-        if (next_event < request->input_event_count) {
-            slice = slice_before(slice, previous_cycles, request->input_events[next_event].cycle);
+        if (next_event < request->input_event_count && (!mouse->readiness_requested || mouse->ready)) {
+            slice = slice_before(slice, previous_cycles, (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle);
         }
+        if (mouse->readiness_requested && !mouse->ready) { slice = 1; }
         if (mouse->replay_index < replay_count) {
             slice = slice_before(slice, previous_cycles, replay[mouse->replay_index].cycle);
         }
@@ -967,7 +1065,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
 static const char *create_machine(struct machine *machine, const struct request *request)
 {
     const bool mac = request->machine == MACHINE_MAC128K;
-    struct image rom = {0}, floppy = {0}, disk = {0}, ega_rom = {0};
+    struct image rom = {0}, floppy = {0}, disk = {0}, ega_rom = {0}, ega_font = {0};
     const DWORD rom_size = mac ? MAC128K_ROM_SIZE : PC286_ROM_SIZE;
     const DWORD floppy_size = mac ? MAC128K_FLOPPY_SIZE : PC286_FLOPPY_SIZE;
     const char *error = read_image(request->rom_path, &rom, rom_size, rom_size,
@@ -987,6 +1085,10 @@ static const char *create_machine(struct machine *machine, const struct request 
                            "EGA option ROM must be between 512 and 32768 bytes");
     }
     if (error == NULL) {
+        error = read_image(request->ega_font_path, &ega_font, 256 * 14, 256 * 14,
+                           "EGA font must contain 3584 bytes");
+    }
+    if (error == NULL) {
         if (mac) {
             machine->mac = mac128k_create(rom.bytes);
             if (machine->mac != NULL && floppy.bytes != NULL &&
@@ -1000,11 +1102,16 @@ static const char *create_machine(struct machine *machine, const struct request 
                 !pc286_load_ega_rom(machine->pc, ega_rom.bytes, ega_rom.size)) {
                 error = "invalid EGA option ROM";
             }
+            if (machine->pc != NULL && ega_font.bytes != NULL &&
+                !pc286_set_ega_font(machine->pc, ega_font.bytes, ega_font.size)) {
+                error = "invalid EGA font";
+            }
         }
         if (machine->mac == NULL && machine->pc == NULL) {
             error = "cannot initialize machine or invalid boot image";
         }
     }
+    free(ega_font.bytes);
     free(ega_rom.bytes);
     free(disk.bytes);
     free(floppy.bytes);
@@ -1050,15 +1157,19 @@ int wmain(int argc, wchar_t **argv)
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
-             "Output: --inspect ADDRESS:LENGTH --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
+             "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
              "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
              "  --mouse-witness-range FIRST:LAST --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
-             "PC input: --scancode CYCLE:BYTE\n"
-             "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events, 4096 inspected bytes.\n"
+             "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
+             "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
+             "PC trace: --pc-witness PATH --pc-witness-memory ADDRESS:LENGTH\n"
+             "  --pc-witness-io PORT:LENGTH --pc-witness-cycles FIRST:LAST\n"
+             "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events,\n"
+             "  16 inspect ranges, 4096 bytes per range, 16384 bytes total.\n"
              "Exit 0 completed, 1 timeout/cancel/fault or unmet condition, 2 invalid request/output.\n"
              "Only --live opens a visible window. See README.md for formats and timing.");
         return 0;
@@ -1074,6 +1185,13 @@ int wmain(int argc, wchar_t **argv)
     if (error == NULL && request.mouse_witness_path != NULL &&
         !mac128k_start_mouse_witness(machine.mac, request.mouse_witness_first, request.mouse_witness_last)) {
         error = "cannot initialize the mouse device witness";
+    }
+    if (error == NULL && request.pc_witness_path != NULL &&
+        !pc286_start_witness(machine.pc, request.pc_witness_memory.address,
+                             request.pc_witness_memory.address + request.pc_witness_memory.length,
+                             request.pc_witness_io.address, request.pc_witness_io.address + request.pc_witness_io.length,
+                             request.pc_witness_first, request.pc_witness_last)) {
+        error = "cannot initialize the 286 witness";
     }
     if (error != NULL) {
         destroy_machine(&machine);
@@ -1108,15 +1226,18 @@ int wmain(int argc, wchar_t **argv)
         CloseHandle(cancel_event);
     }
     const struct machine_state state = get_state(&machine);
-    uint8_t bytes[MAX_INSPECT_BYTES];
+    uint8_t bytes[MAX_INSPECT_TOTAL];
     const uint8_t *inspection_bytes = NULL;
-    if (request.inspect.length != 0) {
-        if (read_ram(&machine, request.inspect.address, bytes, request.inspect.length)) {
-            inspection_bytes = bytes;
-        } else {
+    size_t offset = 0;
+    for (size_t index = 0; index < request.inspect_count; ++index) {
+        if (!read_ram(&machine, request.inspect[index].address, bytes + offset, request.inspect[index].length)) {
             result = (struct run_result){"error", "cannot read requested guest RAM", 2};
+            offset = 0;
+            break;
         }
+        offset += request.inspect[index].length;
     }
+    if (offset != 0) { inspection_bytes = bytes; }
     if (request.frame_path != NULL && !capture_frame(&machine, request.frame_path)) {
         result = (struct run_result){"error", "cannot create or write requested frame", 2};
     }
@@ -1137,7 +1258,10 @@ int wmain(int argc, wchar_t **argv)
     if (request.mouse_witness_path != NULL && !write_mouse_witness(machine.mac, &request, state.cycles)) {
         result = (struct run_result){"error", "cannot create or write requested mouse witness", 2};
     }
-    print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect,
+    if (request.pc_witness_path != NULL && !write_pc_witness(machine.pc, &request, state.cycles)) {
+        result = (struct run_result){"error", "cannot create or write requested 286 witness", 2};
+    }
+    print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
                  &mouse);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

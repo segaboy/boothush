@@ -113,6 +113,12 @@ bool Ega::set_bios_mode(std::uint8_t mode)
     return true;
 }
 
+void Ega::set_text_font(const std::uint8_t font[256 * 14])
+{
+    std::copy_n(font, text_font_.size(), text_font_.begin());
+    has_text_font_ = true;
+}
+
 void Ega::set_cycles(std::uint64_t cycles)
 {
     frame_phase_ = static_cast<std::uint32_t>(cycles % cycles_per_frame);
@@ -294,6 +300,27 @@ void Ega::write_memory(std::uint32_t address, std::uint8_t value)
 
 void Ega::frame_rgb(std::uint8_t *destination) const
 {
+    if (has_text_font_ && palette_enabled_ && (attribute_[attr_mode] & 1) == 0 &&
+        (sequencer_[seq_reset] & 3) == 3) {
+        const unsigned start = (unsigned(crtc_[0x0c]) << 8) | crtc_[0x0d];
+        const unsigned cursor = (unsigned(crtc_[0x0e]) << 8) | crtc_[0x0f];
+        for (unsigned y = 0; y < height; ++y) {
+            for (unsigned column = 0; column < 80; ++column) {
+                const auto offset = static_cast<std::uint16_t>(start + (y / 14) * 80 + column);
+                const std::uint8_t ch = planes_[0][offset];
+                const std::uint8_t attr = planes_[1][offset];
+                std::uint8_t bits = text_font_[ch * 14 + y % 14];
+                if ((crtc_[0x0a] & 0x20) == 0 && offset == cursor &&
+                    y % 14 >= (crtc_[0x0a] & 0x1f) && y % 14 <= (crtc_[0x0b] & 0x1f)) bits = 0xff;
+                for (unsigned bit = 0x80; bit; bit >>= 1) {
+                    const unsigned index = (bits & bit) ? (attr & 15) : ((attr >> 4) & 7);
+                    const auto color = attribute_[index & attribute_[attr_planes]];
+                    *destination++ = channel(color, 2); *destination++ = channel(color, 1); *destination++ = channel(color, 0);
+                }
+            }
+        }
+        return;
+    }
     if (!palette_enabled_ || (attribute_[attr_mode] & graphics_[gc_misc] & 1) == 0 ||
         (misc_output_ & 0x10) != 0 || (sequencer_[seq_reset] & 3) != 3) {
         std::fill_n(destination, frame_size, 0);

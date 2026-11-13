@@ -128,6 +128,21 @@ struct pc286 final : boothush_i286::Bus {
     PcatKeyboard keyboard;
     boothush_i286::i80286_cpu_device cpu{*this};
     uint64_t cycles = 0;
+    std::unique_ptr<pc286_witness_event[]> witness;
+    size_t witness_count = 0;
+    uint64_t witness_dropped = 0;
+    uint32_t witness_mem_start = 0, witness_mem_end = 0;
+    uint32_t witness_io_start = 0, witness_io_end = 0;
+    uint64_t witness_first = 0, witness_last = 0;
+    uint32_t witness_pc = 0;
+    uint16_t witness_cs = 0, witness_ip = 0;
+
+    void observe(uint8_t kind, uint32_t address, uint32_t value, uint8_t width)
+    {
+        if (!witness || cycles < witness_first || cycles > witness_last) return;
+        if (witness_count == PC286_WITNESS_CAPACITY) { ++witness_dropped; return; }
+        witness[witness_count++] = {cycles, witness_pc, address, value, witness_cs, witness_ip, kind, width};
+    }
     const char *fault = nullptr;
     bool post_written = false;
     uint8_t post = 0;
@@ -185,7 +200,7 @@ struct pc286 final : boothush_i286::Bus {
         }
     }
 
-    uint8_t read_memory(uint32_t address) override
+    uint8_t read_memory_value(uint32_t address)
     {
         if (address < ram.size()) {
             return ram[address];
@@ -204,8 +219,18 @@ struct pc286 final : boothush_i286::Bus {
         return ega.handles_memory(address) ? ega.read_memory(address) : 0xff;
     }
 
+    uint8_t read_memory(uint32_t address) override
+    {
+        const uint8_t value = read_memory_value(address);
+        if (witness && address >= witness_mem_start && address < witness_mem_end)
+            observe(PC286_WITNESS_READ, address, value, 1);
+        return value;
+    }
+
     void write_memory(uint32_t address, uint8_t value) override
     {
+        if (witness && address >= witness_mem_start && address < witness_mem_end)
+            observe(PC286_WITNESS_WRITE, address, value, 1);
         if (address < ram.size()) {
             ram[address] = value;
         } else if (ega.handles_memory(address)) {
@@ -213,7 +238,7 @@ struct pc286 final : boothush_i286::Bus {
         }
     }
 
-    uint8_t read_port(uint16_t port) override
+    uint8_t read_port_value(uint16_t port)
     {
         if (port == 0x60 || port == 0x64) {
             return keyboard.read_port(port);
@@ -233,8 +258,18 @@ struct pc286 final : boothush_i286::Bus {
         return ega.handles_port(port) ? ega.read_port(port) : 0xff;
     }
 
+    uint8_t read_port(uint16_t port) override
+    {
+        const uint8_t value = read_port_value(port);
+        if (witness && port >= witness_io_start && port < witness_io_end)
+            observe(PC286_WITNESS_IN, port, value, 1);
+        return value;
+    }
+
     void write_port(uint16_t port, uint8_t value) override
     {
+        if (witness && port >= witness_io_start && port < witness_io_end)
+            observe(PC286_WITNESS_OUT, port, value, 1);
         if (port == 0x80) {
             post_written = true;
             post = value;
@@ -253,12 +288,18 @@ struct pc286 final : boothush_i286::Bus {
 
     uint16_t read_io_word(uint16_t port) override
     {
-        return port == 0x1f0 ? hdc.read_data_word() : Bus::read_io_word(port);
+        if (port != 0x1f0) return Bus::read_io_word(port);
+        const uint16_t value = hdc.read_data_word();
+        if (witness && port >= witness_io_start && port < witness_io_end)
+            observe(PC286_WITNESS_IN, port, value, 2);
+        return value;
     }
 
     void write_io_word(uint16_t port, uint16_t value) override
     {
         if (port == 0x1f0) {
+            if (witness && port >= witness_io_start && port < witness_io_end)
+                observe(PC286_WITNESS_OUT, port, value, 2);
             hdc.write_data_word(value);
         } else {
             Bus::write_io_word(port, value);
@@ -267,7 +308,9 @@ struct pc286 final : boothush_i286::Bus {
 
     uint8_t acknowledge_interrupt() override
     {
-        return devices.acknowledge_interrupt();
+        const uint8_t vector = devices.acknowledge_interrupt();
+        observe(PC286_WITNESS_IRQ, 0, vector, 0);
+        return vector;
     }
 
     void update_interrupts()
@@ -821,9 +864,16 @@ void pc286_run(pc286 *machine, uint32_t cycles)
     while (advanced < cycles && machine->fault == nullptr &&
            !machine->terminal_halt() && !machine->cpu.shutdown()) {
         // Keep device time and REP scheduling independent of the host's poll slice.
+        machine->witness_pc = machine->cpu.pc();
+        machine->witness_cs = machine->cpu.cs();
+        machine->witness_ip = machine->cpu.ip();
+        if (machine->witness) machine->observe(PC286_WITNESS_STEP, 0, 0, 0);
+        const int previous_exception = machine->cpu.last_exception();
         const uint32_t consumed = machine->cpu.halted() && !machine->devices.interrupt_pending()
             ? (machine->devices.timed_interrupt_possible() ? 1 : uint32_t(cycles - advanced))
             : machine->cpu.run(1);
+        if (machine->witness && machine->cpu.last_exception() != previous_exception && machine->cpu.last_exception() >= 0)
+            machine->observe(PC286_WITNESS_EXCEPTION, 0, machine->cpu.last_exception(), 0);
         if (consumed == 0) {
             machine->fault = "cpu_no_progress";
             break;
@@ -831,6 +881,25 @@ void pc286_run(pc286 *machine, uint32_t cycles)
         advanced += consumed;
         machine->advance(consumed);
     }
+}
+
+bool pc286_start_witness(pc286 *machine, uint32_t mem_start, uint32_t mem_end,
+                         uint32_t io_start, uint32_t io_end, uint64_t first_cycle, uint64_t last_cycle)
+{
+    if (mem_start > mem_end || mem_end > 0x1000000 || io_start > io_end || io_end > 0x10000 || first_cycle > last_cycle) return false;
+    machine->witness.reset(new (std::nothrow) pc286_witness_event[PC286_WITNESS_CAPACITY]);
+    if (!machine->witness) return false;
+    machine->witness_mem_start = mem_start; machine->witness_mem_end = mem_end;
+    machine->witness_io_start = io_start; machine->witness_io_end = io_end;
+    machine->witness_first = first_cycle; machine->witness_last = last_cycle;
+    machine->witness_count = 0; machine->witness_dropped = 0;
+    return true;
+}
+
+const pc286_witness_event *pc286_witness(const pc286 *machine, size_t *count, uint64_t *dropped)
+{
+    *count = machine->witness_count; *dropped = machine->witness_dropped;
+    return machine->witness.get();
 }
 
 pc286_state pc286_get_state(const pc286 *machine)
@@ -873,4 +942,11 @@ void pc286_frame_rgb(const pc286 *machine, uint8_t data[PC286_FRAME_SIZE])
     static_assert(PC286_FRAME_HEIGHT == Ega::height);
     static_assert(PC286_FRAME_SIZE == Ega::frame_size);
     machine->ega.frame_rgb(data);
+}
+
+bool pc286_set_ega_font(pc286 *machine, const uint8_t *font, size_t size)
+{
+    if (!machine || !font || size != 256 * 14) return false;
+    machine->ega.set_text_font(font);
+    return true;
 }

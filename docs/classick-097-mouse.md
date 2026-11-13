@@ -57,6 +57,19 @@ The verified candidate reaches pointer `(150,110)`, window `(112,46)`, three pre
 
 The following section describes a separately requested interactive session that opens a visible window.
 
+## Input after guest readiness
+
+Input offsets can be anchored to a memory condition that the guest writes when it is ready. For the older divisor-4 fixture, whose SHA-256 is `b6b9072e7f034d1839a15f6782ed6870e2721fb6677eef320201ef772c506f2f`, the following run observes stage 16 before submitting a 32-pixel motion. Use a fresh trace path.
+
+```powershell
+$oldRom = 'C:\ClasSICK\mac-phase-witness-20261030-a\ci-artifacts\classick-window-live-pair-divisor4-mac\Os-a\classick-loaded-app.rom'
+$trace = Join-Path $env:TEMP ('ready-' + [guid]::NewGuid().ToString('N') + '.bhmouse')
+& $exe --machine mac128k --rom $oldRom --cycles 90000000 --timeout-ms 30000 --input-after 0xc30:4:16 --mouse-dcd-invert 3 --mouse-motion 0:32:0 --mouse-record $trace --inspect 0xb00:1024
+& $exe --machine mac128k --rom $oldRom --cycles 90000000 --timeout-ms 30000 --mouse-replay $trace --inspect 0xb00:1024
+```
+
+On the tested fixture, readiness was detected at cycle 77,711,848 and all 64 quadrature transitions were applied by cycle 90,000,010. The observed guest movement and omission counters remain separate checks. `--input-after` can also anchor `--window-mouse` events, and it is bounded by the normal cycle and timeout limits.
+
 ```powershell
 $capture = Join-Path $build ('mouse-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $capture | Out-Null

@@ -12,6 +12,8 @@ delivers already synchronized nibbles at CPU-cycle boundaries and simulates
 nominal zone speeds. Magnetic flux, PWM speed control, analog seek and spin-up
 delays, IWM bit-level modes and disk writes are outside this profile.
 
+Writable media remains open work. The current insertion path converts the validated source into private encoded GCR tracks and discards the sector-image representation. A complete write path needs bounded write-gate and nibble handling, GCR sector and tag decoding with integrity checks, and explicit raw/DC42 serialization with recalculated checksums. Until these pieces exist there is no modified-media output or guest write persistence. The source image remains unchanged.
+
 The tests generate an original 68000 ROM and floppy payloads. The ROM reads a
 sector through the IWM, decodes its data and tags, verifies the rolling GCR
 checksum, and executes the loaded sector in guest RAM. The raw fixture seeks

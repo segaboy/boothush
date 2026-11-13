@@ -48,7 +48,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--until ADDRESS:WIDTH:VALUE` | Stop when 1, 2 or 4 physical memory bytes equal the value in guest byte order. |
 | `--until-pc ADDRESS` | Stop at a 24-bit physical instruction address. |
 | `--until-post BYTE` | PC only. Stop when the guest writes the value to I/O port `0x80`. |
-| `--inspect ADDRESS:LENGTH` | Return up to 4,096 bytes as hex without triggering guest device reads. |
+| `--inspect ADDRESS:LENGTH` | Inspect physical memory at stop, without device side effects. Repeat up to 16 times, each 1–4,096 bytes, with at most 16,384 bytes total. Overlaps and duplicates are returned in request order. One range keeps the existing `memory` object. Multiple ranges use `memory_ranges`, an array of `{address, bytes}` objects. |
 | `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
 | `--mouse-button CYCLE:STATE` | Macintosh only. Schedule button state `1` pressed or `0` released. |
 | `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
@@ -59,6 +59,12 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
 | `--mouse-witness-range FIRST:LAST` | With `--mouse-witness`, capture only the inclusive guest cycle range. The default is cycle zero through the requested cycle limit. |
+| `--input-after ADDRESS:WIDTH:VALUE` | Start a scheduled-input timeline when this physical-memory condition first matches. Scheduled cycle numbers become offsets from the first matching instruction boundary. Zero-offset events are applied at that boundary. Requires scheduled input and works headlessly with direct input or window messages. |
+| `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. |
+| `--pc-witness-memory ADDRESS:LENGTH` | With `--pc-witness`, record byte bus reads and writes within the specified physical range. |
+| `--pc-witness-io PORT:LENGTH` | With `--pc-witness`, record bus input and output within the specified port range. |
+| `--pc-witness-cycles FIRST:LAST` | With `--pc-witness`, restrict recorded events to these inclusive cycle boundaries. |
+| `--ega-font PATH` | PC only. Supply 3,584 bytes of caller-owned glyphs to enable the 80×25 EGA text snapshot described in [EGA diagnostics](docs/ega.md). |
 | `--mouse-edge-cycles N` | With `--live` or `--mouse-motion`, set the minimum interval between quadrature transitions in guest cycles. The default is 8,192. |
 | `--mouse-dcd-invert MASK` | With `--live` or `--mouse-motion`, flip direction for bit 0 (X) and bit 1 (Y). The default is `0`. The anchored ClasSICK candidate uses `3`. |
 | `--mouse-vbl-guard N` | With `--live` or `--mouse-motion`, leave `N` guest cycles on either side of each vertical blank before applying a transition. The default is 4,096. Use `0` to exercise unrestricted VBL timing. |
@@ -75,6 +81,10 @@ The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. P
 | 0 | `condition_met`, or `cycle_limit` / live `closed` / PC `halted` with no condition requested |
 | 1 | `timeout`, `cancelled`, `machine_fault`, `input_overflow`, `input_error`, or an exit before a requested condition |
 | 2 | `error` in the request, image handling, or diagnostics |
+
+If a readiness condition has not matched when the cycle limit is reached, status is `readiness_not_reached` and exit code is 1. Timeout and cancellation retain their usual statuses. With `--input-after`, `input_schedule` reports whether readiness was observed, the boundary cycle when available, the number scheduled, and the number accepted. `mouse.steps` and `mouse.pending` report delivered and pending transitions. A stop condition is evaluated independently and may stop a run before all scheduled work is accepted. `--mouse-record` supports direct relative motion as well as window input, recording absolute accepted cycles for replay. Reproduce separately scheduled keyboard input during replay. Readiness reads and all inspections are side-effect-free.
+
+The 286 witness begins with `BHPC286W1 STOP COUNT DROPPED` and a column header. Each row gives cycle, CS, IP, physical PC, kind, address, value and width. `step` marks a CPU step, including prefixes and REP iterations. Filtered `read`/`write` are byte bus accesses, `in`/`out` are port operations, `irq` is an acknowledged hardware interrupt vector, and `exception` is a change in the CPU's last-exception value. Repeated identical exceptions may therefore be omitted. Software interrupt instructions and firmware-shim memory operations are not separately traced. Accesses within a CPU step share the step's starting cycle and instruction location. A maximum of 65,536 events is retained and further events are counted in `DROPPED`. A cycle filter is recommended for long runs. This is emulator execution evidence, and does not establish physical-hardware timing.
 
 ## Live Mac mouse tests
 

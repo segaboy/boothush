@@ -23,6 +23,20 @@ enum {
 
 typedef struct pc286 pc286;
 
+enum { PC286_WITNESS_CAPACITY = 65536 };
+typedef struct {
+    uint64_t cycle;
+    uint32_t pc, address, value;
+    uint16_t cs, ip;
+    uint8_t kind, width;
+} pc286_witness_event;
+enum { PC286_WITNESS_STEP, PC286_WITNESS_READ, PC286_WITNESS_WRITE,
+       PC286_WITNESS_IN, PC286_WITNESS_OUT, PC286_WITNESS_IRQ, PC286_WITNESS_EXCEPTION };
+
+bool pc286_start_witness(pc286 *machine, uint32_t mem_start, uint32_t mem_end,
+                         uint32_t io_start, uint32_t io_end, uint64_t first_cycle, uint64_t last_cycle);
+const pc286_witness_event *pc286_witness(const pc286 *machine, size_t *count, uint64_t *dropped);
+
 typedef struct {
     uint64_t cycles;
     uint32_t pc;
@@ -42,6 +56,7 @@ pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size);
 bool pc286_load_ega_rom(pc286 *machine, const uint8_t *rom, size_t size);
+bool pc286_set_ega_font(pc286 *machine, const uint8_t *font, size_t size);
 const uint8_t *pc286_hard_disk(const pc286 *machine);
 bool pc286_inject_scancode(pc286 *machine, uint8_t scancode);
 void pc286_expect_input(pc286 *machine, bool pending);
