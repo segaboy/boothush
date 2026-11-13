@@ -5,6 +5,7 @@
 namespace {
 
 constexpr std::uint8_t keyboard_irq = 0x01;
+constexpr std::uint8_t auxiliary_irq = 0x02;
 constexpr std::uint8_t system_flag = 0x04;
 constexpr std::uint8_t keyboard_disabled = 0x10;
 constexpr std::uint8_t auxiliary_disabled = 0x20;
@@ -67,6 +68,7 @@ std::uint8_t PcatKeyboard::read_port(std::uint16_t port)
         }
         if (output_size_ != 0) {
             status |= output_available;
+            if (output_aux_[output_head_]) status |= 0x20;
         }
         return status;
     }
@@ -108,14 +110,31 @@ bool PcatKeyboard::take_irq1()
     return std::exchange(irq1_pending_, false);
 }
 
+bool PcatKeyboard::take_irq12()
+{
+    return std::exchange(irq12_pending_, false);
+}
+
 bool PcatKeyboard::queue(std::initializer_list<std::uint8_t> bytes)
+{
+    return queue_bytes(bytes, false);
+}
+
+bool PcatKeyboard::queue_aux(std::initializer_list<std::uint8_t> bytes)
+{
+    return queue_bytes(bytes, true);
+}
+
+bool PcatKeyboard::queue_bytes(std::initializer_list<std::uint8_t> bytes, bool auxiliary)
 {
     if (bytes.size() > output_.size() - output_size_) {
         return false;
     }
     const bool previously_empty = output_size_ == 0;
     for (const auto byte : bytes) {
-        output_[(output_head_ + output_size_) % output_.size()] = byte;
+        const auto index = (output_head_ + output_size_) % output_.size();
+        output_[index] = byte;
+        output_aux_[index] = auxiliary;
         ++output_size_;
     }
     if (previously_empty) {
@@ -126,9 +145,10 @@ bool PcatKeyboard::queue(std::initializer_list<std::uint8_t> bytes)
 
 void PcatKeyboard::signal_output()
 {
-    if ((configuration_ & keyboard_irq) && output_size_ != 0) {
-        irq1_pending_ = true;
-    }
+    if (!output_size_) return;
+    if (output_aux_[output_head_]) {
+        if (configuration_ & auxiliary_irq) irq12_pending_ = true;
+    } else if (configuration_ & keyboard_irq) irq1_pending_ = true;
 }
 
 void PcatKeyboard::controller_command(std::uint8_t value)
@@ -148,7 +168,7 @@ void PcatKeyboard::controller_command(std::uint8_t value)
         configuration_ &= ~auxiliary_disabled;
         break;
     case 0xa9:
-        queue({1}); // No auxiliary clock.
+        queue({std::uint8_t(auxiliary_present_ ? 0 : 1)});
         break;
     case 0xaa:
         configuration_ |= system_flag;
@@ -175,6 +195,9 @@ void PcatKeyboard::controller_command(std::uint8_t value)
     case 0xd2:
         controller_write_ = ControllerWrite::output_buffer;
         break;
+    case 0xd4:
+        if (auxiliary_present_) controller_write_ = ControllerWrite::auxiliary;
+        break;
     default:
         // F0..FF briefly pulse the selected output lines low. Line zero
         // is CPU RESET. The latched A20 level stays unchanged after a pulse.
@@ -194,7 +217,7 @@ void PcatKeyboard::write_data(std::uint8_t value)
         if ((previous ^ configuration_) & translate_set2) {
             translated_break_ = false;
         }
-        if (!(previous & keyboard_irq)) {
+        if ((configuration_ & (keyboard_irq | auxiliary_irq)) & ~previous) {
             signal_output();
         }
         break;
@@ -207,10 +230,48 @@ void PcatKeyboard::write_data(std::uint8_t value)
     case ControllerWrite::output_buffer:
         queue({value});
         break;
+    case ControllerWrite::auxiliary:
+        auxiliary_command(value);
+        break;
     case ControllerWrite::none:
         keyboard_command(value);
         break;
     }
+}
+
+void PcatKeyboard::auxiliary_command(std::uint8_t value)
+{
+    if (!auxiliary_present_ || (configuration_ & auxiliary_disabled)) return;
+    bool queued = false;
+    switch (value) {
+    case 0xff:
+        queued = queue_aux({ack, 0xaa, 0x00});
+        if (queued) auxiliary_streaming_ = false;
+        break;
+    case 0xf5:
+    case 0xf6:
+        queued = queue_aux({ack});
+        if (queued) auxiliary_streaming_ = false;
+        break;
+    case 0xf4:
+        queued = queue_aux({ack});
+        if (queued) auxiliary_streaming_ = true;
+        break;
+    default:
+        queued = queue_aux({resend});
+        break;
+    }
+    if (!queued) ++dropped_aux_replies_;
+}
+
+bool PcatKeyboard::inject_mouse(std::int32_t dx, std::int32_t dy, bool primary)
+{
+    if (!auxiliary_present_ || !auxiliary_streaming_ || (configuration_ & auxiliary_disabled) ||
+        dx < -255 || dx > 255 || dy < -255 || dy > 255) return false;
+    const std::int32_t device_y = -dy;
+    const auto flags = std::uint8_t(0x08 | (primary ? 1 : 0) |
+                                    (dx < 0 ? 0x10 : 0) | (device_y < 0 ? 0x20 : 0));
+    return queue_aux({flags, std::uint8_t(dx & 0xff), std::uint8_t(device_y & 0xff)});
 }
 
 bool PcatKeyboard::keyboard_reply(std::initializer_list<std::uint8_t> bytes)

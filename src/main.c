@@ -15,6 +15,7 @@
 #include "pc286.h"
 #include "x64_media.h"
 #include "video_capture.h"
+#include "media_convert.h"
 
 enum {
     MAX_INSPECT_BYTES = 4096,
@@ -1333,6 +1334,16 @@ static int probe_x64_capability(void)
 
 int wmain(int argc, wchar_t **argv)
 {
+    if (argc >= 2 && wcscmp(argv[1], L"--convert-capture") == 0) {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        if (argc != 5 || wcscmp(argv[3], L"--output") != 0 || !*argv[2] || !*argv[4])
+            return request_error("usage: --convert-capture INPUT --output OUTPUT");
+        const char *format = NULL;
+        const char *error = convert_capture(argv[2], argv[4], &format);
+        if (error != NULL) return request_error(error);
+        printf("{\"status\":\"capture_converted\",\"format\":\"%s\"}\n", format);
+        return 0;
+    }
     if (argc == 2 && wcscmp(argv[1], L"--x64-capability") == 0) {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         return probe_x64_capability();
@@ -1356,6 +1367,7 @@ int wmain(int argc, wchar_t **argv)
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"
+             "Convert: --convert-capture INPUT --output OUTPUT (.gif, .mp4 or .png; bundled FFmpeg)\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"

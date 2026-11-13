@@ -6,6 +6,10 @@ ClasSICK developers can start with the [headless integration guide](docs/classic
 
 The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and a read-only disk and EFI inspection command. **An x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
+An opt-in PS/2 auxiliary-device model has independent tests for ClasSICK's mouse startup and packet routing. It is not connected to a guest profile yet; see [PS/2 auxiliary model](docs/ps2-auxiliary.md).
+
+An independent x64 boot-services state model tests page allocation and stale memory-map keys, but is not yet connected to guest firmware or execution.
+
 `--x64-capability` reports a Windows Hypervisor Platform availability query without creating a virtual machine or executing a guest. It does not establish that a usable backend exists in BootHush.
 
 | Profile | Supported test path |
@@ -87,6 +91,8 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 Use one stop condition at most. Numbers accept decimal or `0x` hex. The runner checks conditions at Macintosh instruction boundaries and PC CPU step boundaries, including x86 prefix steps and REP iterations. Physical memory diagnostics cover the Macintosh’s 128 KiB RAM or the PC’s conventional RAM and EGA aperture below `0xC0000`. Supply up to 1,024 input events in cycle order. They take effect at the first CPU boundary at or after the requested cycle.
 
 The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. PC adds `cs`, `ip`, `halted`, and the last POST byte and exception vector when available. Optional `memory` contains the physical address and hexadecimal bytes. A bus fault reports its operation and address.
+
+`--convert-capture INPUT --output OUTPUT` converts a headless capture to GIF, MP4 or PNG using the FFmpeg bundled next to the executable. See [headless capture](docs/headless-capture.md) for bundle assembly and exact examples.
 
 When video is requested, `video` in the result reports frame count, dimensions, sampling rate, actual last sampled cycle and whether a frame was omitted after the limit. The [capture guide](docs/headless-capture.md) explains timing and output size.
 

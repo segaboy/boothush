@@ -32,18 +32,30 @@ The stream is intentionally large: at 10 fps it uses about 5.25 MB/s for Mac and
 
 ## Convert to GIF, MP4, or PNG
 
-The optional helper uses **a caller-supplied local FFmpeg**, with no download or bundled codec. FFmpeg is installed on the development machine; the MP4 command needs its `libx264` encoder. Other builds may not include it. The helper runs FFmpeg with no console window, uses a private temporary output, refuses an existing destination, and reports conversion errors. Use original captures outside the repository:
+The local BootHush build is bundled with FFmpeg at `out\windows\ffmpeg\ffmpeg.exe`. BootHush invokes this copy directly with no console window; it does not search `PATH` or require Python for conversion. It uses a new temporary output, refuses an existing destination, cleans up after a failed conversion, and imposes a two-minute conversion timeout. Use original captures outside the repository:
 
 ```powershell
-$python = 'C:\Users\segab\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-$convert = 'C:\Repos\boothush\scripts\convert_capture.py'
-$ffmpeg = (Get-Command ffmpeg).Source
 $gif = Join-Path $env:TEMP ('guest-' + [guid]::NewGuid().ToString('N') + '.gif')
 $mp4 = Join-Path $env:TEMP ('guest-' + [guid]::NewGuid().ToString('N') + '.mp4')
 $png = Join-Path $env:TEMP ('guest-' + [guid]::NewGuid().ToString('N') + '.png')
-& $python $convert --ffmpeg $ffmpeg --input $video --output $gif
-& $python $convert --ffmpeg $ffmpeg --input $video --output $mp4
-& $python $convert --ffmpeg $ffmpeg --input $still --output $png
+& $exe --convert-capture $video --output $gif
+& $exe --convert-capture $video --output $mp4
+& $exe --convert-capture $still --output $png
 ```
 
-GIF uses FFmpeg's GIF encoder; MP4 uses H.264 with `yuv420p`, so it is lossy and color resolution is reduced. PNG is lossless for a PBM/PPM screenshot; a PNG converted from video represents its first sampled frame, not necessarily the final guest state. Outputs are silent. Conversion is separate from emulation and cannot change guest execution. To include conversion in the test suite, set `BOOTHUSH_TEST_FFMPEG` to the local executable path before running CTest.
+GIF uses FFmpeg's GIF encoder; MP4 uses H.264 with `yuv420p`, so it is lossy and color resolution is reduced. PNG is lossless for a PBM/PPM screenshot; a PNG converted from video represents its first sampled frame, not necessarily the final guest state. Outputs are silent. Conversion is separate from emulation and cannot change guest execution. The old Python helper is retained and defaults to the bundled executable; `--ffmpeg` is an explicit override.
+
+## Bundle provenance and rebuilding
+
+The current local bundle contains FFmpeg `N-125875-g5d4d3bdc61-20260731`, SHA-256 `851aa8ea5366b5af33c0681cc292d662829c7088e9ac96f6e9b37030e6835ba4`. It was copied from the machine's existing WinGet FFmpeg package, along with that package's GPLv3 license text. The copy is independent of the installed executable and continues to work without a system FFmpeg on `PATH`. `ffmpeg\manifest.json` records the exact executable hash and version/configuration output. The 145 MB binary and generated build directory are not committed to Git; a source-only checkout needs a separate local bundle assembly step. Before distributing the binary externally, review the third-party build's complete license notices and corresponding source obligations; this local packaging is not a redistribution compliance determination.
+
+After building BootHush, assemble the bundle from a reviewed, locally supplied Windows FFmpeg build that includes `libx264` and its license file. No download is performed:
+
+```powershell
+$python = 'C:\Users\segab\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$source = 'C:\path\to\ffmpeg.exe'
+$license = 'C:\path\to\LICENSE.txt'
+& $python C:\Repos\boothush\scripts\bundle_ffmpeg.py --ffmpeg $source --license $license --destination C:\Repos\boothush\out\windows
+```
+
+The assembly tool checks the supplied executable's version, copies it beside BootHush, records hashes, and refuses to replace a different existing bundled executable. It also copies the compatibility helper. To run the optional encoder/decoder tests, set `BOOTHUSH_TEST_FFMPEG` to `C:\Repos\boothush\out\windows\ffmpeg\ffmpeg.exe` before running CTest. The native bundled-conversion test runs when the adjacent bundled executable is present.

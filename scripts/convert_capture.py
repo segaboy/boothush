@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a BootHush capture using a caller-supplied local FFmpeg executable."""
+"""Convert a BootHush capture with bundled FFmpeg or an explicit override."""
 import argparse
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ffmpeg", required=True, type=Path, help="Path to an installed ffmpeg executable")
+    parser.add_argument("--ffmpeg", type=Path, help="Optional explicit FFmpeg override")
     parser.add_argument("--input", required=True, type=Path, help="BootHush Y4M, PBM or PPM capture")
     parser.add_argument("--output", required=True, type=Path, help="New .gif, .mp4 or .png file")
     parser.add_argument("--timeout-seconds", type=int, default=120)
@@ -25,7 +25,17 @@ def main():
         print("output already exists", file=sys.stderr)
         return 2
     try:
-        ffmpeg = args.ffmpeg.resolve(strict=True)
+        # The distributed helper is in <bundle>/scripts; the checkout helper
+        # locates the built bundle under out/windows. Never consult PATH.
+        base = Path(__file__).resolve().parents[1]
+        if args.ffmpeg is not None:
+            ffmpeg = args.ffmpeg.resolve(strict=True)
+        else:
+            candidates = (base / 'ffmpeg' / 'ffmpeg.exe', base / 'out' / 'windows' / 'ffmpeg' / 'ffmpeg.exe')
+            ffmpeg = next((path for path in candidates if path.is_file()), None)
+            if ffmpeg is None:
+                raise ValueError("bundled FFmpeg not found; assemble the BootHush bundle or provide --ffmpeg")
+            ffmpeg = ffmpeg.resolve(strict=True)
         source = args.input.resolve(strict=True)
         if not ffmpeg.is_file() or not source.is_file():
             raise ValueError("ffmpeg and input must be files")

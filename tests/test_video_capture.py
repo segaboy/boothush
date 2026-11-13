@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -131,6 +132,48 @@ class VideoCaptureTests(BootHushTestCase):
                 self.assertEqual(pixels.stdout[:3], bytes(3))
             self.assertEqual(subprocess.run(cmd, capture_output=True).returncode, 2)
             self.assertEqual(output.read_bytes(), before)
+
+    def test_bundled_native_conversion_without_path(self):
+        bundled = self.exe.parent / 'ffmpeg' / 'ffmpeg.exe'
+        if not bundled.is_file():
+            self.skipTest('bundled FFmpeg not supplied')
+        video = self.scratch / 'native.y4m'
+        still = self.scratch / 'still.pbm'
+        self.boot('--video', video, '--video-fps', '60', '--frame', still, cycles=280000)
+        env = os.environ.copy()
+        env['PATH'] = str(self.scratch)  # Do not use a system FFmpeg.
+        for ext in ('gif', 'mp4', 'png'):
+            output = self.scratch / f'guest space & ü.{ext}'
+            source = still if ext == 'png' else video
+            cmd = [self.exe, '--convert-capture', source, '--output', output]
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout), {'status': 'capture_converted', 'format': ext})
+            before = output.read_bytes()
+            self.assertGreater(len(before), 100)
+            decoded = subprocess.run([bundled, '-v', 'error', '-i', output, '-f', 'null', '-'],
+                                     capture_output=True, env=env,
+                                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.assertEqual(decoded.returncode, 0, decoded.stderr)
+            repeated = subprocess.run(cmd, capture_output=True, text=True, env=env,
+                                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.assertEqual(repeated.returncode, 2)
+            self.assertEqual(output.read_bytes(), before)
+        self.assertFalse(list(self.scratch.glob('*.boothush-*.tmp')))
+        bad = subprocess.run([self.exe, '--convert-capture', video, '--output', self.scratch / 'x.bad'],
+                             capture_output=True, text=True, env=env,
+                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(bad.returncode, 2)
+        invalid = self.scratch / 'invalid.y4m'
+        invalid.write_bytes(b'not a video')
+        failed_output = self.scratch / 'invalid.mp4'
+        failed = subprocess.run([self.exe, '--convert-capture', invalid, '--output', failed_output],
+                                capture_output=True, text=True, env=env,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(failed.returncode, 2)
+        self.assertFalse(failed_output.exists())
+        self.assertFalse(list(self.scratch.glob('*.boothush-*.tmp')))
 
 
 if __name__ == '__main__':
