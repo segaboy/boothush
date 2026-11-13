@@ -20,6 +20,7 @@ bool nes_step(nes *machine);
 void nes_set_controller(nes *machine, unsigned port, uint8_t buttons);
 bool nes_capture_audio(nes *machine);
 const int16_t *nes_audio(const nes *machine, size_t *sample_count);
+void nes_audio_consume(nes *machine, size_t sample_count);
 nes_state nes_get_state(const nes *machine);
 bool nes_inspect(const nes *machine, uint16_t address, uint8_t *out, size_t size);
 /* Last completed 256x240 RGB frame, or NULL if none has completed. */

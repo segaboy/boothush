@@ -2,6 +2,8 @@
 
 BootHush has an experimental headless Nintendo Entertainment System target for caller-supplied NROM cartridges. It includes a CPU, an approximate PPU renderer and timing model, OAM DMA, scheduled controller input, and approximate audio capture. It is **not a complete NES emulator**: cycle-accurate PPU/APU behavior, save RAM, other mappers, and full CPU conformance are missing. Graphics, audio and timing have known approximations. Do not treat results as physical-hardware validation.
 
+For embedding in another application, see the [NES C library](nes-api.md). It uses the same core but has its own in-process interface and execution bounds.
+
 ```powershell
 & 'C:\Repos\boothush\out\windows\boothush.exe' --machine nes `
   --rom 'C:\path\to\original-test.nes' --steps 100000 --timeout-ms 5000 `

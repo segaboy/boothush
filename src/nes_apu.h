@@ -77,6 +77,7 @@ public:
         }
     }
     const std::vector<int16_t> &samples() const {return pcm;}
+    void consume_samples(size_t count) {pcm.erase(pcm.begin(),pcm.begin()+count);}
     bool truncated() const {return was_truncated;}
     uint64_t write_count() const {return writes;}
     bool dmc_was_used() const {return dmc_used;}

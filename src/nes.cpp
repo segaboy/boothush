@@ -231,6 +231,7 @@ bool nes_step(nes *m) {return m->step();}
 void nes_set_controller(nes *m,unsigned port,uint8_t buttons) {if(port<2) m->controller_live[port]=buttons;}
 bool nes_capture_audio(nes *m) {return m->apu.capture();}
 const int16_t *nes_audio(const nes *m,size_t *count) {const auto &s=m->apu.samples();*count=s.size();return s.data();}
+void nes_audio_consume(nes *m,size_t count) {m->apu.consume_samples(count);}
 nes_state nes_get_state(const nes *m) {return {m->pc,m->fault_address,m->a,m->x,m->y,m->sp,m->p,m->opcode,m->steps,m->cpu_cycles,m->ppu.frame_count(),m->apu.write_count(),m->dma_transfers,m->apu.dmc_was_used(),m->apu.truncated(),m->fault};}
 bool nes_inspect(const nes *m,uint16_t address,uint8_t *out,size_t size) {
     if(size>0x10000u-address || (!out&&size)) return false;

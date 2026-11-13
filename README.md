@@ -10,6 +10,8 @@ The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK 
 
 The experimental [NES target](docs/nes.md) runs supported NROM cartridges headlessly, with bounded CPU execution, approximate PPU frames and audio, and scheduled controller input. CPU, graphics and audio conformance remain incomplete; cartridge mappers other than NROM are not implemented.
 
+Other Windows applications can embed that same core using the experimental [NES C library and API](docs/nes-api.md). The build installs a DLL, C header and CMake package; an independent consumer example is included.
+
 `--map-x64-media DISK --load-base ADDRESS` additionally extracts the EFI file from the validated disk and constructs a relocated PE32+ image in host memory for inspection. It does not execute a guest.
 
 `--probe-x64-software DISK --steps N` interprets a small, explicitly documented set of x64 instructions from the disk's EFI entry point without a hypervisor. This experimental probe provides only a synthetic stack and zeroed registers, not a valid UEFI context; it is not a boot. Unsupported instructions and memory faults stop visibly. See the [x64 notes](docs/classick-x64.md) for the exact limits and exit statuses.
