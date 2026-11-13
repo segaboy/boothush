@@ -1,5 +1,7 @@
 # ClasSICK 0.97 headless integration
 
+ClasSICK is BootHush's immediate integration priority. BootHush's broader goal is headless development and testing of portable software across platforms; see the [project direction](project-direction.md).
+
 BootHush is a Windows command-line test runner. The local checkout contains the current interface and tests. The usual built executable on this machine is `C:\Repos\boothush\out\windows\boothush.exe`. A checkout and an executable are separate artifacts. Check the source revision with `git -C C:\Repos\boothush rev-parse HEAD`, inspect the executable with `--help` and `--version`, and use `Get-FileHash` to identify its bytes. Rebuild it from the checkout when the source or build provenance is uncertain. Build instructions and the complete command reference are in the [README](../README.md).
 
 Normal runs are headless and return one JSON result. When launching from Python with redirected output, use `creationflags=subprocess.CREATE_NO_WINDOW` to keep the console hidden. `--window-mouse` uses an invisible owned window with injected messages. `--live` opens a visible window for an explicitly selected interactive session. Neither requires control of unrelated Windows applications.

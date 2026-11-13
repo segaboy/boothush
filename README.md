@@ -1,6 +1,8 @@
 # BootHush
 
-BootHush is a Windows 11 emulator for fast, repeatable ClasSICK development tests. Each invocation loads local images, runs an isolated guest, returns one JSON result, and exits. Runs are headless by default. The Mac profile also has an opt-in window for live mouse testing and recording.
+BootHush is a headless development and testing platform for portable software and ports between different platforms. Its goal is to let developers build a repeatable test, run it against supported source and target environments, and compare behavior while they adapt the software. See the [project direction](docs/project-direction.md) for the intended workflow and current boundaries.
+
+ClasSICK is the immediate development priority and the project exercising BootHush today. The current implementation runs on Windows and provides Mac 128K and 286 machine profiles. Guest invocations load local images, run an isolated guest, return a JSON result, and exit. Runs are headless by default. The Mac profile also has an opt-in window for live mouse testing and recording.
 
 ClasSICK developers can start with the [headless integration guide](docs/classick-integration.md) for the current Mac and 286 interfaces, runnable examples, and limitations. Read the local checkout to discover changes committed there.
 
