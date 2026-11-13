@@ -8,7 +8,7 @@ ClasSICK developers can start with the [headless integration guide](docs/classic
 
 The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK UEFI goal and current development tools. **A complete x86-64 CPU, UEFI firmware, and x64 guest boot are not yet implemented.**
 
-The experimental [NES target](docs/nes.md) runs documented 6502 CPU instructions from original iNES NROM cartridges, with bounded execution and RAM inspection. CPU conformance remains incomplete, and graphics, sound, controllers and game compatibility are not yet implemented.
+The experimental [NES target](docs/nes.md) runs supported NROM cartridges headlessly, with bounded CPU execution, approximate PPU frames and audio, and scheduled controller input. CPU, graphics and audio conformance remain incomplete; cartridge mappers other than NROM are not implemented.
 
 `--map-x64-media DISK --load-base ADDRESS` additionally extracts the EFI file from the validated disk and constructs a relocated PE32+ image in host memory for inspection. It does not execute a guest.
 

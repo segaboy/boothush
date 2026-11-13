@@ -4,6 +4,7 @@
 __pycache__/
 *.pyc
 *.rom
+*.nes
 *.img
 *.ima
 *.dsk
@@ -13,3 +14,7 @@ __pycache__/
 *.vdi
 *.pbm
 *.ppm
+*.y4m
+*.wav
+*.mp4
+*.gif

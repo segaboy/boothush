@@ -14,16 +14,17 @@ static bool write_all(HANDLE file, const void *data, DWORD size)
     return WriteFile(file, data, size, &written, NULL) && written == size;
 }
 
-bool video_open(video_capture *video, const wchar_t *path, bool mac,
-                uint32_t fps, uint32_t limit, uint64_t start)
+static bool open_sized(video_capture *video, const wchar_t *path, bool mac,
+                       uint32_t width, uint32_t height, uint32_t clock_hz,
+                       uint32_t fps, uint32_t limit, uint64_t start)
 {
     video->file = INVALID_HANDLE_VALUE;
-    video->width = mac ? MAC128K_FRAME_WIDTH : PC286_FRAME_WIDTH;
-    video->height = mac ? MAC128K_FRAME_HEIGHT : PC286_FRAME_HEIGHT;
+    video->width = width;
+    video->height = height;
     video->fps = fps;
     video->limit = limit;
     video->start = start;
-    video->clock_hz = mac ? 7833600 : 6000000;
+    video->clock_hz = clock_hz;
     const size_t pixels = (size_t)video->width * video->height;
     video->planes = malloc(pixels * 3);
     video->rgb = mac ? NULL : malloc(pixels * 3);
@@ -47,6 +48,19 @@ bool video_open(video_capture *video, const wchar_t *path, bool mac,
         return false;
     }
     return true;
+}
+
+bool video_open(video_capture *video, const wchar_t *path, bool mac,
+                uint32_t fps, uint32_t limit, uint64_t start)
+{
+    return open_sized(video,path,mac,mac?MAC128K_FRAME_WIDTH:PC286_FRAME_WIDTH,
+                      mac?MAC128K_FRAME_HEIGHT:PC286_FRAME_HEIGHT,mac?7833600:6000000,fps,limit,start);
+}
+
+bool video_open_rgb(video_capture *video, const wchar_t *path, uint32_t width, uint32_t height,
+                    uint32_t clock_hz, uint32_t fps, uint32_t limit, uint64_t start)
+{
+    return open_sized(video,path,false,width,height,clock_hz,fps,limit,start);
 }
 
 uint64_t video_next_cycle(const video_capture *video)

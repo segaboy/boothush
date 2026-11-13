@@ -28,7 +28,7 @@ This is the intended direction, not a description of all current commands. Suppo
 
 ## Current implementation and immediate work
 
-The current Windows implementation provides `mac128k` and `pc286` machine profiles and an experimental [NES CPU-only target](nes.md), along with profile-specific bounded runs, scheduled input, inspections, witnesses, headless screenshots and video capture, and selected record/replay. The [README](../README.md) and individual profile guides define their actual scope. The NES target is not a complete console. Observed timing and replay results do not establish physical-hardware fidelity.
+The current Windows implementation provides `mac128k` and `pc286` machine profiles and an experimental [NES target](nes.md), along with profile-specific bounded runs, scheduled input, inspections, witnesses, headless screenshots and video capture, and selected record/replay. The NES target now has approximate PPU, input and audio models but is not a complete console. The [README](../README.md) and individual profile guides define their actual scope. Observed timing and replay results do not establish physical-hardware fidelity.
 
 ClasSICK remains an immediate priority: investigate the Mac mouse behavior and build an x86-64 UEFI guest capable of running its actual disk headlessly. The x64 software probe interprets a small set of instructions from the real EFI image, but it supplies no UEFI context and **does not boot the guest**. Media inspection, PE mapping, the PS/2 component, and boot-services state model remain partial foundations. See the [ClasSICK integration guide](classick-integration.md) and [x64 notes](classick-x64.md).
 
