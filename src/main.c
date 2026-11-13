@@ -14,6 +14,7 @@
 #include "mac_mouse_trace.h"
 #include "pc286.h"
 #include "x64_media.h"
+#include "video_capture.h"
 
 enum {
     MAX_INSPECT_BYTES = 4096,
@@ -59,6 +60,7 @@ struct request {
     const wchar_t *ega_rom_path;
     const wchar_t *ega_font_path;
     const wchar_t *frame_path;
+    const wchar_t *video_path;
     const wchar_t *cancel_event;
     const wchar_t *mouse_record_path;
     const wchar_t *mouse_replay_path;
@@ -66,6 +68,8 @@ struct request {
     const wchar_t *pc_witness_path;
     uint32_t cycle_limit;
     uint32_t timeout_ms;
+    uint32_t video_fps, video_limit, video_start;
+    bool video_fps_set, video_limit_set, video_start_set;
     struct predicate until;
     struct predicate input_after;
     struct inspection pc_witness_memory, pc_witness_io;
@@ -321,6 +325,20 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->ega_font_path = value;
         } else if (wcscmp(option, L"--frame") == 0 && request->frame_path == NULL) {
             request->frame_path = value;
+        } else if (wcscmp(option, L"--video") == 0 && request->video_path == NULL) {
+            request->video_path = value;
+        } else if (wcscmp(option, L"--video-fps") == 0 && !request->video_fps_set) {
+            if (!parse_fields(value, fields, 1) || fields[0] < 1 || fields[0] > 60)
+                return "video-fps must be between 1 and 60";
+            request->video_fps_set = true; request->video_fps = fields[0];
+        } else if (wcscmp(option, L"--video-frames") == 0 && !request->video_limit_set) {
+            if (!parse_fields(value, fields, 1) || fields[0] < 1 || fields[0] > 3600)
+                return "video-frames must be between 1 and 3600";
+            request->video_limit_set = true; request->video_limit = fields[0];
+        } else if (wcscmp(option, L"--video-start") == 0 && !request->video_start_set) {
+            if (!parse_fields(value, fields, 1) || fields[0] > MAX_CYCLES)
+                return "video-start must be between 0 and 4000000000";
+            request->video_start_set = true; request->video_start = fields[0];
         } else if (wcscmp(option, L"--cancel-event") == 0 && request->cancel_event == NULL) {
             request->cancel_event = value;
         } else if (wcscmp(option, L"--live") == 0 && request->live_scale == 0) {
@@ -453,6 +471,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->cycle_limit == 0 || request->timeout_ms == 0) {
         return "machine, cycles, and timeout-ms are required";
     }
+    if (!request->video_path && (request->video_fps_set || request->video_limit_set || request->video_start_set))
+        return "video settings require video";
+    if (!request->video_fps_set) request->video_fps = 10;
+    if (!request->video_limit_set) request->video_limit = 300;
     if ((request->until.width != 0) + request->stop_at_pc + request->stop_at_post > 1) {
         return "choose one stop condition";
     }
@@ -834,7 +856,7 @@ static bool matches(const struct machine *machine, struct predicate until)
 static void print_result(const char *status, enum machine_kind machine,
                          struct machine_state state, const char *error,
                          const uint8_t *bytes, const struct inspection *inspect, size_t inspect_count,
-                         const struct mouse_session *mouse)
+                         const struct mouse_session *mouse, const video_capture *video)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
@@ -869,6 +891,13 @@ static void print_result(const char *status, enum machine_kind machine,
         if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
         printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
     }
+    if (video != NULL) {
+        printf(",\"video\":{\"format\":\"y4m\",\"width\":%" PRIu32 ",\"height\":%" PRIu32
+               ",\"fps\":%" PRIu32 ",\"start_cycle\":%" PRIu64 ",\"frames\":%" PRIu32
+               ",\"frame_limit\":%" PRIu32 ",\"truncated\":%s,\"last_cycle\":%" PRIu64 "}",
+               video->width, video->height, video->fps, video->start, video->count, video->limit,
+               video->truncated ? "true" : "false", video->last_cycle);
+    }
     if (bytes != NULL && inspect_count != 0) {
         fputs(inspect_count == 1 ? ",\"memory\":" : ",\"memory_ranges\":[", stdout);
         size_t offset = 0;
@@ -888,7 +917,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL);
+                 NULL, 0, NULL, NULL);
     return 2;
 }
 
@@ -981,7 +1010,7 @@ static bool enqueue_replay_samples(struct mouse_session *mouse, uint64_t through
 }
 
 static struct run_result run_machine(struct machine *machine, const struct request *request,
-                                     struct mouse_session *mouse, HANDLE cancel_event)
+                                     struct mouse_session *mouse, HANDLE cancel_event, video_capture *video)
 {
     LARGE_INTEGER frequency, start;
     if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&start)) {
@@ -1007,6 +1036,18 @@ static struct run_result run_machine(struct machine *machine, const struct reque
     uint64_t presented_vbl = UINT64_MAX;
 
     for (;;) {
+        if (video != NULL && state.cycles >= video_next_cycle(video)) {
+            if (video->count == video->limit) {
+                video->truncated = true;
+            } else {
+                const uint8_t *bitmap = machine->mac ? mac128k_frame(machine->mac) : NULL;
+                if (machine->pc) pc286_frame_rgb(machine->pc, video->rgb);
+                if (!video_append(video, bitmap, video->rgb, state.cycles)) {
+                    video->failed = true;
+                    return (struct run_result){"error", "cannot write video capture", 2};
+                }
+            }
+        }
         if (state.fault_operation != NULL) {
             return (struct run_result){"machine_fault", NULL, 1};
         }
@@ -1128,6 +1169,10 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         slice = slice_before(slice, previous_cycles, cycle_limit);
         slice = slice_before(slice, previous_cycles, live_target);
         slice = slice_before(slice, previous_cycles, mouse_deadline);
+        if (video != NULL && video->count < video->limit) {
+            const uint64_t video_deadline = video_next_cycle(video);
+            if (video_deadline > previous_cycles) slice = slice_before(slice, previous_cycles, video_deadline);
+        }
         if (next_event < request->input_event_count && (!mouse->readiness_requested || mouse->ready)) {
             slice = slice_before(slice, previous_cycles, (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle);
         }
@@ -1310,6 +1355,7 @@ int wmain(int argc, wchar_t **argv)
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
+             "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
@@ -1372,8 +1418,22 @@ int wmain(int argc, wchar_t **argv)
         destroy_machine(&machine);
         return request_error(error);
     }
+    video_capture capture = {0};
+    video_capture *video = NULL;
+    if (request.video_path != NULL) {
+        if (!video_open(&capture, request.video_path, machine.mac != NULL,
+                        request.video_fps, request.video_limit, request.video_start)) {
+            close_mouse_session(&mouse);
+            if (cancel_event != NULL) CloseHandle(cancel_event);
+            destroy_machine(&machine);
+            return request_error("cannot create or initialize requested video");
+        }
+        video = &capture;
+    }
     const BOOL console_handler = SetConsoleCtrlHandler(on_console_event, TRUE);
-    struct run_result result = run_machine(&machine, &request, &mouse, cancel_event);
+    struct run_result result = run_machine(&machine, &request, &mouse, cancel_event, video);
+    if (video != NULL && !video_finish(video, video->failed))
+        result = (struct run_result){"error", "cannot close requested video", 2};
     if (mouse.window != NULL) {
         mac_live_window_destroy(mouse.window);
         mouse.window = NULL;
@@ -1418,7 +1478,7 @@ int wmain(int argc, wchar_t **argv)
         result = (struct run_result){"error", "cannot create or write requested 286 witness", 2};
     }
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
-                 &mouse);
+                 &mouse, video);
     close_mouse_session(&mouse);
     destroy_machine(&machine);
     if (console_handler) {

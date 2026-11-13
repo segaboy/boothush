@@ -57,6 +57,10 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--until-post BYTE` | PC only. Stop when the guest writes the value to I/O port `0x80`. |
 | `--inspect ADDRESS:LENGTH` | Inspect physical memory at stop, without device side effects. Repeat up to 16 times, each 1–4,096 bytes, with at most 16,384 bytes total. Overlaps and duplicates are returned in request order. One range keeps the existing `memory` object. Multiple ranges use `memory_ranges`, an array of `{address, bytes}` objects. |
 | `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
+| `--video PATH` | Record guest framebuffer samples headlessly as an uncompressed Y4M file. See [headless capture](docs/headless-capture.md) for GIF, MP4 and PNG conversion. |
+| `--video-fps N` | Video sampling rate in guest time, 1–60 frames per second; default 10. |
+| `--video-frames N` | Bound the recording to 1–3,600 frames; default 300. Guest execution continues after the cap. |
+| `--video-start CYCLE` | Start sampling at an absolute guest cycle, default zero. Useful for skipping boot. |
 | `--mouse-button CYCLE:STATE` | Macintosh only. Schedule button state `1` pressed or `0` released. |
 | `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
 | `--mouse-motion CYCLE:DX:DY` | Macintosh only. Queue signed pixel deltas through the same paced quadrature bridge used for live input. Positive X is right and positive Y is down. Scheduled buttons join the same queue. |
@@ -83,6 +87,8 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 Use one stop condition at most. Numbers accept decimal or `0x` hex. The runner checks conditions at Macintosh instruction boundaries and PC CPU step boundaries, including x86 prefix steps and REP iterations. Physical memory diagnostics cover the Macintosh’s 128 KiB RAM or the PC’s conventional RAM and EGA aperture below `0xC0000`. Supply up to 1,024 input events in cycle order. They take effect at the first CPU boundary at or after the requested cycle.
 
 The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. PC adds `cs`, `ip`, `halted`, and the last POST byte and exception vector when available. Optional `memory` contains the physical address and hexadecimal bytes. A bus fault reports its operation and address.
+
+When video is requested, `video` in the result reports frame count, dimensions, sampling rate, actual last sampled cycle and whether a frame was omitted after the limit. The [capture guide](docs/headless-capture.md) explains timing and output size.
 
 | Exit code | Result |
 | --- | --- |

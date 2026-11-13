@@ -45,7 +45,7 @@ target_include_directories(boothush_x64_media PUBLIC src)
 target_compile_features(boothush_x64_media PUBLIC cxx_std_20)
 target_link_libraries(boothush_x64_media PUBLIC bcrypt)
 
-add_executable(boothush src/main.c src/pc286.cpp)
+add_executable(boothush src/main.c src/pc286.cpp src/video_capture.c)
 target_compile_features(boothush PRIVATE c_std_11 cxx_std_20)
 target_link_libraries(boothush PRIVATE boothush_mac i286 boothush_x64_media)
 
@@ -63,7 +63,7 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    add_executable(boothush_mac_live_cli_test src/main.c src/pc286.cpp tests/mac_live_cli_window.cpp)
+    add_executable(boothush_mac_live_cli_test src/main.c src/pc286.cpp src/video_capture.c tests/mac_live_cli_window.cpp)
     target_compile_features(boothush_mac_live_cli_test PRIVATE c_std_11 cxx_std_20)
     target_compile_definitions(boothush_mac_live_cli_test PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:mac_live_window_create=boothush_test_window_create>")

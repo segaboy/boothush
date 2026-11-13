@@ -63,6 +63,8 @@ The retained diagnostic produced the same stopped state with and without the wit
 
 ## Display and remaining limits
 
+Both existing machines can record a bounded headless Y4M video, then use an explicitly supplied local FFmpeg to make GIF, MP4 or PNG. See the [capture guide](headless-capture.md) for complete commands, timing and limits. The x64 profile is not implemented and cannot yet produce frames.
+
 Mac captures use PBM. PC captures use RGB PPM. EGA graphics capture is available, and `--ega-font PATH` enables a fixed 80×25 text snapshot using a caller-supplied 3,584-byte font. The [EGA reference](ega.md) defines layout and limitations. The [PC/AT profile](pc-at.md) describes 286 hardware and media.
 
 Mac floppy images are currently read-only. The [Mac floppy notes](mac-floppy.md) describe the missing write path. Mac mouse edge spacing and the VBL guard are configurable delivery controls. The model and its timing have not been established against a physical Macintosh. An emulator run alone does not establish physical-hardware behavior or historical System 1 compatibility.
