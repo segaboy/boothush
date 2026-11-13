@@ -30,6 +30,36 @@ The JSON `video` object reports `format`, `width`, `height`, `fps`, requested `s
 
 The stream is intentionally large: at 10 fps it uses about 5.25 MB/s for Mac and 6.72 MB/s for 286, before conversion. The default limit is 300 frames; raise it explicitly for longer captures and leave enough disk space. PC pixels are converted from the emulator's RGB framebuffer to limited-range BT.601 YUV 4:4:4; Mac's black and white bits become corresponding luma. The sampling and conversion do not establish real-time display accuracy. Capture can consume wall time and affect a tight wall-clock timeout even though guest time is sampled deterministically.
 
+## Frame series
+
+NES and Mac runs can capture up to **32** requested points in one run using `--capture-series NEW_PATH`. Repeat `--capture-cycle N` for modeled CPU-cycle points. NES additionally supports `--capture-frame N` for completed PPU frames, and Mac supports `--capture-vbl N` for modeled VBL count; numbered frame/VBL points start at 1. Choose one axis per run. Values must be at most 4,000,000,000; points are sorted chronologically with command-line order retained for ties. A path and at least one point are required. PC, live input and mouse replay are not supported by this feature.
+
+The output is a bounded concatenation of complete, self-contained images: NES P6 RGB PPM images, or Mac P4 monochrome PBM images. JSON stdout is the manifest; save it alongside the output. `frame_series` identifies the ROM bytes actually loaded and the running executable by SHA-256, axis, readiness mode, total bytes, requested/processed/pending counts, missing images and dropped count. Each processed sample records the requested and effective target, actual guest cycle, completed NES frame or Mac VBL, NES instruction count where applicable, count of inputs accepted before capture, and byte offset and length within the series. Pending points have no image. An NES cycle point before the first completed frame is processed with `image_available: false` and no image bytes; it is not silently delayed. A run stopped before readiness or a later point leaves it pending. The point limit is validated rather than dropping excess requests; the maximum image data is about 5.9 MB for NES and 0.7 MB for Mac. Existing output paths are never overwritten.
+
+`--capture-memory ADDRESS:LENGTH` adds one side-effect-free CPU RAM/ROM snapshot of 1-256 bytes to every processed point. Mac accepts physical RAM only; NES accepts CPU RAM/mirrors `$0000-$1FFF` or mapped PRG ROM `$8000-$FFFF`. NES also supports `--capture-ppu ADDRESS:LENGTH` and `--capture-oam OFFSET:LENGTH`, each 1-256 bytes within the respective address space. CPU, PPU and OAM bytes are sampled together at the listed instruction boundary. The NES image is the **last completed PPU frame**, which can have completed earlier; it is not a claim that every pixel and memory byte represents the same instant. The Mac image is a copy of the live framebuffer at the listed boundary, not a hardware-latched completed frame; a VBL-indexed capture can still reflect modeled mid-draw contents.
+
+Cycle points are absolute unless `--input-after` is used, in which case they are offsets from the first matching readiness boundary. Frame and VBL points are always absolute. A Mac readiness-anchored neutral capture can have no scheduled inputs. Each point is processed at the first observed CPU instruction boundary at or after its target; overshoot can differ between scenarios. The actual frame/VBL count can exceed a requested number when an instruction crosses a boundary. No one-to-one timing relationship is assumed between NES PAL frames and Mac VBLs.
+
+At an NES boundary: regular sampled video, readiness, scheduled memory observations, frame-series capture, stop/limits, input, then instruction. At a Mac boundary: sampled video, fault/cancellation/timeout checks, readiness, frame-series capture, stop/limits, input, then instruction. Thus a capture at the same boundary as scheduled input sees guest state before that input is applied; an input coinciding with a stop is pending. `inputs_accepted_before` and the NES `cycle_schedule`/`instruction_schedule` or Mac `series_inputs` record the scheduled input ordering and actual application cycles. For Mac, these describe emulator-accepted events, not necessarily guest-delivered keyboard replies. File creation and writing occur after guest execution; a write failure reports an error. A completed output can be partial when execution stops early, so check run status and pending counts.
+
+Example using an original Mac fixture whose RAM `$b00` indicates readiness:
+
+```powershell
+$exe = 'C:\Repos\boothush\out\windows\boothush.exe'
+$rom = 'C:\path\to\fixture.rom'
+$result = & $exe --machine mac128k --rom $rom --cycles 1000000 --timeout-ms 5000 `
+  --input-after 0xb00:4:0x1234abcd --key 50000:0:1 --key 100000:0:0 `
+  --capture-series C:\path\to\new-series.pbm --capture-cycle 0 --capture-cycle 150000 `
+  --capture-memory 0xb00:4
+$result | Set-Content -Encoding utf8 C:\path\to\new-result.json
+python C:\Repos\boothush\scripts\extract_frame_series.py `
+  --result C:\path\to\new-result.json --series C:\path\to\new-series.pbm --output C:\path\to\new-directory
+```
+
+The extraction helper validates image offsets, sizes and headers, refuses an existing output directory, and writes `frame-NNN.pbm`/`.ppm` plus a copy of the full manifest. A missing/pending point has no image file. Original ROMs, captures and traces remain local; the helper does not download or alter guest media.
+
+See [Super Tilt Bro port capture observations](porting-capture-evidence.md) for a hash-identified NES beta and independent Mac controls probe run, including the requested versus actual boundaries.
+
 ## Convert to GIF, MP4, or PNG
 
 The local BootHush build is bundled with FFmpeg at `out\windows\ffmpeg\ffmpeg.exe`. BootHush invokes this copy directly with no console window; it does not search `PATH` or require Python for conversion. It uses a new temporary output, refuses an existing destination, cleans up after a failed conversion, and imposes a two-minute conversion timeout. Use original captures outside the repository:

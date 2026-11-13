@@ -156,10 +156,33 @@ struct mac128k {
     uint32_t witness_pending = 0;
     uint32_t witness_ram_first = 0, witness_ram_length = 0;
     uint64_t witness_ram_matched = 0, witness_ram_dropped = 0;
+    std::unique_ptr<mac128k_keyboard_event[]> keyboard_witness;
+    size_t keyboard_witness_count=0;
+    uint64_t keyboard_witness_first=0,keyboard_witness_last=0,keyboard_witness_dropped=0,keyboard_rejected=0;
+    std::unique_ptr<mac128k_display_event[]> display_witness;
+    size_t display_witness_count=0;
+    uint64_t display_first=0,display_last=0,display_dropped=0;
+    uint32_t display_ram_first=0,display_ram_length=0;
     boothush::Iwm iwm{};
     MacKeyboard keyboard{};
     MacRtc rtc{};
     Cpu cpu{*this};
+
+    void keyboard_observe(uint64_t cycle,uint8_t kind,uint8_t value,uint8_t queue,uint64_t due=0) {
+        if(!keyboard_witness || cycle<keyboard_witness_first || cycle>keyboard_witness_last) return;
+        if(keyboard_witness_count==8192) {++keyboard_witness_dropped;return;}
+        keyboard_witness[keyboard_witness_count++]={cycle,due,cpu.getPC(),kind,value,queue};
+    }
+    static void keyboard_trace(void *context,uint64_t cycle,MacKeyboard::TraceKind kind,uint8_t value,size_t queue) {
+        auto *machine=static_cast<mac128k *>(context);
+        machine->keyboard_observe(cycle,static_cast<uint8_t>(kind),value,static_cast<uint8_t>(queue));
+    }
+    void display_observe(uint8_t kind,uint32_t address=0,uint32_t value=0,uint8_t width=0) {
+        uint64_t cycle=static_cast<uint64_t>(cpu.getClock());
+        if(!display_witness || cycle<display_first || cycle>display_last) return;
+        if(display_witness_count==8192) {++display_dropped;return;}
+        display_witness[display_witness_count++]={cycle,vbl,cpu.getPC0(),address,value,kind,width};
+    }
 
     bool overlay() const
     {
@@ -237,6 +260,7 @@ struct mac128k {
             const uint64_t elapsed = (cycle - next_vbl_cycle) / cycles_per_vbl + 1;
             vbl += elapsed;
             next_vbl_cycle += elapsed * cycles_per_vbl;
+            if(display_witness) display_observe(0,0,static_cast<uint32_t>(elapsed));
             interrupt_flags |= via_ca1_flag;
             update_irq();
         }
@@ -284,6 +308,7 @@ struct mac128k {
     {
         fault_address = address;
         fault_operation = operation;
+        if(display_witness) display_observe(2,address);
         throw AccessFault{};
     }
 
@@ -338,7 +363,7 @@ struct mac128k {
             return static_cast<uint8_t>(timer1_latch >> 8);
         case 10:
             clear_interrupts(via_shift_flag);
-            return keyboard.shift_register();
+            return keyboard.read_shift_register(cpu.getClock());
         case 11:
             return auxiliary_control;
         case 12:
@@ -559,6 +584,11 @@ struct mac128k {
             for (size_t i = size; i != 0; --i) {
                 bytes[i - 1] = static_cast<uint8_t>(value);
                 value >>= 8;
+            }
+            if(display_witness && display_ram_length) {
+                const uint32_t offset=static_cast<uint32_t>(bytes-ram.data());
+                if(offset<display_ram_first+display_ram_length && display_ram_first<offset+size)
+                    display_observe(1,offset,original,static_cast<uint8_t>(size));
             }
             if (witness && witness_detail && witness_ram_length) {
                 const uint32_t offset = static_cast<uint32_t>(bytes - ram.data());
@@ -789,7 +819,42 @@ const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine,
 bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed)
 {
     static_assert(MAC128K_MAX_KEY_CODE == MacKeyboard::max_scan_code);
-    return machine->keyboard.queue_key(code, pressed, machine->cpu.getClock());
+    bool accepted=machine->keyboard.queue_key(code, pressed, machine->cpu.getClock());
+    if(!accepted) ++machine->keyboard_rejected;
+    return accepted;
+}
+
+bool mac128k_start_keyboard_witness(mac128k *machine,uint64_t first,uint64_t last)
+{
+    if(!machine || first>last) return false;
+    auto rows=std::unique_ptr<mac128k_keyboard_event[]>(new(std::nothrow) mac128k_keyboard_event[8192]);
+    if(!rows) return false;
+    machine->keyboard_witness=std::move(rows);machine->keyboard_witness_count=0;
+    machine->keyboard_witness_dropped=0;machine->keyboard_rejected=0;
+    machine->keyboard_witness_first=first;machine->keyboard_witness_last=last;
+    machine->keyboard.set_trace(&mac128k::keyboard_trace,machine);return true;
+}
+void mac128k_keyboard_input_due(mac128k *machine,uint64_t due,uint8_t code,bool pressed)
+{
+    const uint8_t value=static_cast<uint8_t>((code<<1)|1|(pressed?0:0x80));
+    machine->keyboard_observe(machine->cpu.getClock(),9,value,static_cast<uint8_t>(machine->keyboard.queue_size()),due);
+}
+const mac128k_keyboard_event *mac128k_keyboard_witness(const mac128k *machine,size_t *count,uint64_t *dropped,uint64_t *rejected)
+{
+    *count=machine->keyboard_witness_count;*dropped=machine->keyboard_witness_dropped;*rejected=machine->keyboard_rejected;
+    return machine->keyboard_witness.get();
+}
+bool mac128k_start_display_witness(mac128k *machine,uint64_t first,uint64_t last,uint32_t address,uint32_t length)
+{
+    if(!machine || first>last || address>MAC128K_RAM_SIZE || length>MAC128K_RAM_SIZE-address) return false;
+    auto rows=std::unique_ptr<mac128k_display_event[]>(new(std::nothrow) mac128k_display_event[8192]);
+    if(!rows) return false;
+    machine->display_witness=std::move(rows);machine->display_first=first;machine->display_last=last;
+    machine->display_ram_first=address;machine->display_ram_length=length;machine->display_witness_count=0;machine->display_dropped=0;return true;
+}
+const mac128k_display_event *mac128k_display_witness(const mac128k *machine,size_t *count,uint64_t *dropped)
+{
+    *count=machine->display_witness_count;*dropped=machine->display_dropped;return machine->display_witness.get();
 }
 
 bool mac128k_read_ram(const mac128k *machine, uint32_t address, uint8_t *data, size_t size)

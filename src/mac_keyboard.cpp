@@ -32,6 +32,7 @@ constexpr uint64_t inquiry_cycles = microseconds_to_cycles(250'000);
 
 void MacKeyboard::set_auxiliary_control(uint8_t value, uint64_t cycle)
 {
+    record(cycle,mode,value);
     const uint8_t mode = value & shift_mask;
     if (mode == shift_mode_) {
         return;
@@ -53,6 +54,7 @@ void MacKeyboard::set_auxiliary_control(uint8_t value, uint64_t cycle)
 
 void MacKeyboard::write_shift_register(uint8_t value, uint64_t cycle)
 {
+    record(cycle,shift_write,value);
     shift_register_ = value;
     preloaded_ = shift_mode_ == 0;
     if (shift_mode_ == shift_out) {
@@ -73,6 +75,7 @@ void MacKeyboard::begin_reply(uint64_t cycle, uint8_t value, bool consumes_key)
     consumes_key_ = consumes_key;
     transfer_end_ = cycle + reply_cycles;
     phase_ = Phase::receiving;
+    record(cycle,reply_begin,value);
 }
 
 void MacKeyboard::prepare_reply(uint64_t cycle)
@@ -100,12 +103,14 @@ void MacKeyboard::prepare_reply(uint64_t cycle)
 
 bool MacKeyboard::queue_key(uint8_t scan_code, bool pressed, uint64_t cycle)
 {
+    const auto transition = static_cast<uint8_t>((scan_code << 1) | 1 | (pressed ? 0 : 0x80));
     if (scan_code > max_scan_code || key_count_ == keys_.size()) {
+        record(cycle,rejected,transition);
         return false;
     }
-    const auto transition = static_cast<uint8_t>((scan_code << 1) | 1 | (pressed ? 0 : 0x80));
     keys_[(head_ + key_count_) % keys_.size()] = transition;
     ++key_count_;
+    record(cycle,queued,transition);
 
     if (phase_ == Phase::waiting && command_ == inquiry &&
         shift_mode_ == shift_in && cycle < inquiry_expiry_) {
@@ -119,6 +124,7 @@ bool MacKeyboard::advance(uint64_t cycle)
     if (phase_ == Phase::sending && cycle >= transfer_end_) {
         inquiry_expiry_ = transfer_end_ + inquiry_cycles;
         phase_ = Phase::waiting;
+        record(cycle,command_complete,command_);
         return true;
     }
     if (phase_ == Phase::waiting && command_ == inquiry &&
@@ -127,9 +133,11 @@ bool MacKeyboard::advance(uint64_t cycle)
     }
     if (phase_ == Phase::receiving && cycle >= transfer_end_) {
         shift_register_ = reply_;
+        record(cycle,reply_complete,reply_);
         if (consumes_key_) {
             head_ = (head_ + 1) % keys_.size();
             --key_count_;
+            record(cycle,key_delivered,reply_);
         }
         phase_ = Phase::idle;
         return true;

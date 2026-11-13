@@ -10,10 +10,15 @@ class MacKeyboard {
 public:
     static constexpr uint8_t max_scan_code = 0x39;
     static constexpr std::size_t queue_capacity = 64;
+    enum TraceKind : uint8_t { queued, rejected, mode, shift_write, command_complete, reply_begin, reply_complete, key_delivered, shift_read };
+    using Trace = void (*)(void *, uint64_t, TraceKind, uint8_t, std::size_t);
+    void set_trace(Trace trace, void *context) { trace_=trace; context_=context; }
+    std::size_t queue_size() const { return key_count_; }
 
     void set_auxiliary_control(uint8_t value, uint64_t cycle);
     void write_shift_register(uint8_t value, uint64_t cycle);
     uint8_t shift_register() const { return shift_register_; }
+    uint8_t read_shift_register(uint64_t cycle) { record(cycle,shift_read,shift_register_); return shift_register_; }
     bool queue_key(uint8_t scan_code, bool pressed, uint64_t cycle);
 
     // A true result sets the VIA shift register's IFR bit. The caller clears
@@ -26,6 +31,7 @@ private:
     void begin_send(uint64_t cycle);
     void begin_reply(uint64_t cycle, uint8_t value, bool consumes_key = false);
     void prepare_reply(uint64_t cycle);
+    void record(uint64_t cycle,TraceKind kind,uint8_t value) { if(trace_) trace_(context_,cycle,kind,value,key_count_); }
 
     std::array<uint8_t, queue_capacity> keys_{};
     std::size_t head_ = 0;
@@ -39,6 +45,8 @@ private:
     uint8_t reply_ = 0;
     bool consumes_key_ = false;
     bool preloaded_ = false;
+    Trace trace_ = nullptr;
+    void *context_ = nullptr;
 };
 
 #endif

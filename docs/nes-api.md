@@ -2,6 +2,8 @@
 
 BootHush exposes its NES core to other Windows applications through a C ABI, without launching the CLI, requiring a window, or taking host input. This is version **0.1.1**, an experimental integration interface; compatibility across future minor versions is not promised. `bh_nes_api_version()` returns `BH_NES_API_VERSION` (`0x000101` for 0.1.1). The machine is still experimental, with the cartridge and accuracy limits documented in [NES target](nes.md). A usable library is not a claim that the emulator is complete.
 
+The new indexed [frame series](headless-capture.md#frame-series), controller witness and cycle-based scenario scheduling are available through the CLI process interface. They are not exposed as C-library calls in 0.1.1; an embedding application can still step the core and copy its latest frame and state itself, within the contracts below.
+
 ## Install and consume
 
 Build BootHush normally, then install to a writable directory. For example, from the checkout, with the same CMake and toolchain used for the build:

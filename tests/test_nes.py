@@ -183,6 +183,45 @@ class NesTarget(unittest.TestCase):
                      ('--until-input-cycle','1',)):
             with self.subTest(args=args): self.assertEqual(self.run_nes(image,*args)[0],2)
 
+    def test_nes_frame_series_cycle_frame_memory_and_bounds(self):
+        image=cartridge(bytes.fromhex('a901 8510 4c0480'))
+        path=self.file.parent/'series.ppm'; repeat=self.file.parent/'repeat.ppm'
+        def run(p):
+            return self.run_nes(image,'--capture-series',str(p),'--capture-cycle','0',
+                                '--capture-cycle','30000','--capture-cycle','60000','--capture-cycle','70000',
+                                '--capture-memory','0x10:1','--capture-ppu','0:1','--capture-oam','0:1',
+                                '--controller-cycle','30000:1','--until-cycle','60000',steps=40000)
+        code,first=run(path);code2,second=run(repeat)
+        self.assertEqual((code,code2),(0,0));self.assertEqual(first,second);self.assertEqual(path.read_bytes(),repeat.read_bytes())
+        series=first['frame_series'];samples=series['samples'];payload=path.read_bytes()
+        self.assertEqual(series['rom_sha256'],hashlib.sha256(image).hexdigest())
+        self.assertEqual(series['executable_sha256'],hashlib.sha256(Path(os.environ['BOOTHUSH_EXE']).read_bytes()).hexdigest())
+        self.assertEqual((series['processed'],series['pending']),(3,1))
+        self.assertFalse(samples[0]['image_available']);self.assertEqual(samples[0]['memory']['bytes'],'00')
+        self.assertEqual(samples[1]['memory']['bytes'],'01');self.assertEqual(samples[1]['inputs_accepted_before'],0)
+        self.assertEqual(samples[2]['inputs_accepted_before'],1)
+        self.assertEqual(samples[1]['ppu']['bytes'],'00');self.assertEqual(samples[1]['oam']['bytes'],'00')
+        for sample in samples[1:3]:
+            self.assertTrue(sample['image_available']);self.assertGreaterEqual(sample['cycle'],sample['target'])
+            self.assertEqual(len(payload[sample['offset']:sample['offset']+sample['length']]),15+256*240*3)
+            self.assertTrue(payload[sample['offset']:].startswith(b'P6\n256 240\n255\n'))
+        before=path.read_bytes();self.assertEqual(run(path)[0],2);self.assertEqual(path.read_bytes(),before)
+        code,r=self.run_nes(image,'--capture-series',str(self.file.parent/'frames.ppm'),
+                            '--capture-frame','1','--capture-frame','2','--capture-frame','3',
+                            '--until-frame','2',steps=40000)
+        self.assertEqual((code,r['frame_series']['processed'],r['frame_series']['pending']),(0,2,1))
+        self.assertEqual([x['frame'] for x in r['frame_series']['samples'][:2]],[1,2])
+        missing=self.file.parent/'missing.ppm'
+        code,r=self.run_nes(image,'--input-after','0x10:1:3','--capture-series',str(missing),
+                            '--capture-cycle','0',steps=100)
+        self.assertEqual((code,r['status'],r['frame_series']['processed'],r['frame_series']['pending']),(1,'readiness_not_reached',0,1))
+        self.assertEqual(missing.read_bytes(),b'')
+        for args in (('--capture-series',str(self.file.parent/'bad')),('--capture-cycle','1'),
+                     ('--capture-series',str(self.file.parent/'bad'),'--capture-cycle','1','--capture-frame','1'),
+                     ('--capture-series',str(self.file.parent/'bad'),'--capture-cycle','1','--capture-memory','0x1fff:2'),
+                     ('--capture-series',str(self.file.parent/'bad'),'--capture-cycle','1','--capture-oam','255:2')):
+            with self.subTest(args=args):self.assertEqual(self.run_nes(image,*args)[0],2)
+
     def test_controller_witness_guest_reads_and_overflow(self):
         program=bytes.fromhex('a901 8d1640 a900 8d1640 ad1640 8500 ad1740 8501 4c0080')
         image=cartridge(program); witness=self.file.parent/'controller.txt'
@@ -227,9 +266,13 @@ class NesTarget(unittest.TestCase):
         movement_start=next(e['actual_cycle'] for e in events if e['requested_step']==10000000)
         def run(name,p1,p2):
             frame=self.file.parent/(name+'.ppm')
+            series_file=self.file.parent/(name+'.series')
             cmd=common+['--steps','15000000','--until-cycle',str(end_cycle),
                         '--observe-cycle',f'{end_cycle}:0:256','--inspect','0:2048',
-                        '--inspect-oam','0:256','--frame',str(frame)]
+                        '--inspect-oam','0:256','--frame',str(frame),
+                        '--capture-series',str(series_file),'--capture-memory','0:32']
+            for point in (movement_start+40000,movement_start+80000,movement_start+120000):
+                cmd += ['--capture-cycle',str(point)]
             witness=self.file.parent/(name+'.ctrl')
             if name in ('cycle-both','cycle-both-repeat'):
                 cmd += ['--controller-witness',str(witness),'--controller-witness-cycles',f'{movement_start}:{movement_start+100000}']
@@ -243,6 +286,8 @@ class NesTarget(unittest.TestCase):
             result=json.loads(p.stdout)
             self.assertEqual((result['status'],result['rom_sha256'],result['cartridge']['region']),('condition_met',digest,'pal'))
             self.assertEqual((result['controller_schedule']['accepted'],result['cycle_observations']['completed']),(len(events),1))
+            self.assertEqual((result['frame_series']['processed'],result['frame_series']['pending']),(3,0))
+            self.assertTrue(all(s['image_available'] and s['cycle']>=s['target'] for s in result['frame_series']['samples']))
             self.assertEqual(result['stop_condition']['target_cycle'],end_cycle)
             self.assertGreaterEqual(result['cpu_cycles'],end_cycle)
             self.assertLess(result['cpu_cycles']-end_cycle,1024)
@@ -251,11 +296,13 @@ class NesTarget(unittest.TestCase):
                 self.assertEqual(result['controller_witness']['dropped'],0)
                 self.assertTrue({1,2}.issubset({int(row[5]) for row in rows if row[4]=='read'}))
                 self.assertTrue(all(any(row[4]=='read' and int(row[5])==port and int(row[6])==65 for row in rows) for port in (1,2)))
-            return result,frame.read_bytes()
+            return result,frame.read_bytes(),series_file.read_bytes()
         neutral=run('cycle-neutral',0,0); one=run('cycle-p1',128,0); two=run('cycle-p2',0,64)
         both=run('cycle-both',128,64); repeated=run('cycle-both-repeat',128,64)
         self.assertEqual(both,repeated)
         self.assertNotEqual(one[1],neutral[1]);self.assertNotEqual(two[1],neutral[1])
+        self.assertEqual([s['target'] for s in one[0]['frame_series']['samples']],
+                         [s['target'] for s in neutral[0]['frame_series']['samples']])
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),digest)
 
     def test_concurrent_cpu_ppu_and_oam_inspection(self):

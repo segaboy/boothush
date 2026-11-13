@@ -31,6 +31,11 @@ typedef struct {
     const char *fault_operation;
 } mac128k_state;
 
+/* M0110 witness kinds 0-8 follow queue, reject, mode, SR write, command
+   completion, reply start/completion, key delivery, SR read; 9 is input due. */
+typedef struct { uint64_t cycle,due; uint32_t pc; uint8_t kind,value,queue; } mac128k_keyboard_event;
+typedef struct { uint64_t cycle,vbl; uint32_t pc,address,value; uint8_t kind,width; } mac128k_display_event;
+
 /* Copies a complete ROM and resets the machine. NULL indicates allocation failure. */
 mac128k *mac128k_create(const uint8_t rom[MAC128K_ROM_SIZE]);
 void mac128k_destroy(mac128k *machine);
@@ -67,6 +72,12 @@ const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine,
 
 /* Queues a guest M0110 key transition without touching host input. */
 bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed);
+bool mac128k_start_keyboard_witness(mac128k *machine,uint64_t first,uint64_t last);
+void mac128k_keyboard_input_due(mac128k *machine,uint64_t due,uint8_t code,bool pressed);
+const mac128k_keyboard_event *mac128k_keyboard_witness(const mac128k *machine,size_t *count,uint64_t *dropped,uint64_t *rejected);
+/* Optional VBL/fault and selected physical RAM-write witness. */
+bool mac128k_start_display_witness(mac128k *machine,uint64_t first,uint64_t last,uint32_t address,uint32_t length);
+const mac128k_display_event *mac128k_display_witness(const mac128k *machine,size_t *count,uint64_t *dropped);
 
 /* Reads physical RAM without triggering guest bus side effects. */
 bool mac128k_read_ram(const mac128k *machine, uint32_t address, uint8_t *data, size_t size);

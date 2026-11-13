@@ -47,6 +47,28 @@ struct inspection {
     uint32_t length;
 };
 
+enum { SERIES_MAX_POINTS=32, SERIES_MAX_MEMORY=256 };
+struct series_sample {
+    uint64_t target,cycle,frame,step,offset;
+    uint32_t size;
+    size_t inputs;
+    bool image_available;
+    uint8_t memory[SERIES_MAX_MEMORY],ppu[SERIES_MAX_MEMORY],oam[SERIES_MAX_MEMORY];
+};
+struct frame_series {
+    const wchar_t *path;
+    unsigned mode; /* 1: cycles, 2: NES completed frames or Mac VBLs */
+    bool relative,written;
+    uint32_t points[SERIES_MAX_POINTS];
+    size_t count,completed;
+    struct inspection memory,ppu,oam;
+    struct series_sample samples[SERIES_MAX_POINTS];
+    uint8_t *data;
+    size_t used,capacity;
+    uint8_t rom_sha256[32],executable_sha256[32];
+    bool identity_set;
+};
+
 enum input_kind { INPUT_BUTTON, INPUT_PHASE, INPUT_MOTION, INPUT_MAC_KEY, INPUT_PC_SCAN, INPUT_WINDOW };
 
 struct input_event {
@@ -73,6 +95,8 @@ struct request {
     const wchar_t *mouse_record_path;
     const wchar_t *mouse_replay_path;
     const wchar_t *mouse_witness_path;
+    const wchar_t *keyboard_witness_path;
+    const wchar_t *display_witness_path;
     const wchar_t *pc_witness_path;
     uint32_t cycle_limit;
     uint32_t timeout_ms;
@@ -82,6 +106,7 @@ struct request {
     struct predicate input_after;
     struct inspection pc_witness_memory, pc_witness_io;
     struct inspection mouse_witness_memory;
+    struct inspection display_witness_memory;
     uint32_t pc_witness_first, pc_witness_last;
     bool pc_witness_cycles_set;
     bool fail_floppy_read_set;
@@ -98,16 +123,21 @@ struct request {
     uint32_t mouse_vbl_guard;
     uint32_t mouse_witness_first;
     uint32_t mouse_witness_last;
+    uint32_t keyboard_witness_first,keyboard_witness_last;
+    uint32_t display_witness_first,display_witness_last;
     uint8_t mouse_dcd_invert;
     bool mouse_invert_set;
     bool mouse_guard_set;
     bool mouse_witness_range_set;
+    bool keyboard_witness_range_set;
+    bool display_witness_range_set;
     bool mouse_witness_detail;
     bool raw_mouse_phases;
     bool relative_motion;
     bool window_input;
     struct input_event input_events[MAX_INPUT_EVENTS];
     size_t input_event_count;
+    struct frame_series series;
 };
 
 struct image {
@@ -118,10 +148,12 @@ struct image {
 struct machine {
     mac128k *mac;
     pc286 *pc;
+    uint8_t rom_sha256[32];
 };
 
 struct mouse_session {
     mac128k *mac;
+    const struct request *request;
     mac_mouse *bridge;
     mac_live_window *window;
     mac_mouse_trace *record;
@@ -135,6 +167,7 @@ struct mouse_session {
     uint64_t ready_cycle;
     size_t scheduled;
     size_t scheduled_accepted;
+    uint64_t event_cycles[MAX_INPUT_EVENTS];
     uint8_t source;
     uint32_t edge_cycles, guard_cycles;
     uint8_t invert;
@@ -142,6 +175,9 @@ struct mouse_session {
     bool guard_noted;
     bool witness_detail;
 };
+
+struct keyboard_summary { size_t count,scheduled,accepted; uint64_t dropped,rejected; };
+struct display_summary { size_t count; uint64_t dropped; };
 
 struct machine_state {
     uint64_t cycles;
@@ -221,6 +257,33 @@ static bool parse_fields(const wchar_t *text, uint32_t *fields, size_t count)
         }
     }
     return *text == '\0';
+}
+
+/* 1=handled, 0=not a series option, -1=invalid. */
+static int parse_series_option(struct frame_series *s,const wchar_t *option,const wchar_t *value,bool is_nes)
+{
+    uint32_t fields[2];
+    if(!wcscmp(option,L"--capture-series")) {
+        if(s->path || !*value) return -1;
+        s->path=value;return 1;
+    }
+    if(!wcscmp(option,L"--capture-cycle") || !wcscmp(option,is_nes?L"--capture-frame":L"--capture-vbl")) {
+        unsigned mode=!wcscmp(option,L"--capture-cycle")?1:2;
+        if(s->count==SERIES_MAX_POINTS || (s->mode && s->mode!=mode) ||
+           !parse_fields(value,fields,1) || fields[0]>MAX_CYCLES || (mode==2 && !fields[0])) return -1;
+        s->mode=mode;size_t pos=s->count++;
+        while(pos && s->points[pos-1]>fields[0]) {s->points[pos]=s->points[pos-1];--pos;}
+        s->points[pos]=fields[0];return 1;
+    }
+    struct inspection *range=NULL;
+    if(!wcscmp(option,L"--capture-memory")) range=&s->memory;
+    else if(is_nes && !wcscmp(option,L"--capture-ppu")) range=&s->ppu;
+    else if(is_nes && !wcscmp(option,L"--capture-oam")) range=&s->oam;
+    if(range) {
+        if(range->length || !parse_fields(value,fields,2) || !fields[1] || fields[1]>SERIES_MAX_MEMORY) return -1;
+        *range=(struct inspection){fields[0],fields[1]};return 1;
+    }
+    return 0;
 }
 
 static bool parse_u64(const wchar_t *text, uint64_t *result)
@@ -337,6 +400,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         if (*value == '\0') {
             return "option values must be nonempty";
         }
+        const int series_option=parse_series_option(&request->series,option,value,false);
+        if(series_option<0) return "invalid or repeated capture-series option";
+        if(series_option>0) continue;
         if (wcscmp(option, L"--machine") == 0 && request->machine == MACHINE_UNSET) {
             if (wcscmp(value, L"mac128k") == 0) {
                 request->machine = MACHINE_MAC128K;
@@ -391,6 +457,19 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_replay_path = value;
         } else if (wcscmp(option, L"--mouse-witness") == 0 && request->mouse_witness_path == NULL) {
             request->mouse_witness_path = value;
+        } else if (wcscmp(option, L"--keyboard-witness") == 0 && request->keyboard_witness_path == NULL) {
+            request->keyboard_witness_path = value;
+        } else if (wcscmp(option, L"--keyboard-witness-range") == 0 && !request->keyboard_witness_range_set) {
+            if(!parse_fields(value,fields,2) || fields[0]>fields[1] || fields[1]>MAX_CYCLES) return "invalid keyboard witness cycle range";
+            request->keyboard_witness_first=fields[0];request->keyboard_witness_last=fields[1];request->keyboard_witness_range_set=true;
+        } else if(wcscmp(option,L"--display-witness")==0 && !request->display_witness_path) {
+            request->display_witness_path=value;
+        } else if(wcscmp(option,L"--display-witness-range")==0 && !request->display_witness_range_set) {
+            if(!parse_fields(value,fields,2) || fields[0]>fields[1] || fields[1]>MAX_CYCLES) return "invalid display witness cycle range";
+            request->display_witness_first=fields[0];request->display_witness_last=fields[1];request->display_witness_range_set=true;
+        } else if(wcscmp(option,L"--display-witness-memory")==0 && !request->display_witness_memory.length) {
+            if(!parse_fields(value,fields,2) || !fields[1] || fields[0]>=MAC128K_RAM_SIZE || fields[1]>MAC128K_RAM_SIZE-fields[0]) return "invalid display witness RAM range";
+            request->display_witness_memory=(struct inspection){fields[0],fields[1]};
         } else if (wcscmp(option, L"--mouse-witness-detail") == 0 && !request->mouse_witness_detail) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-detail requires 1";
             request->mouse_witness_detail = true;
@@ -515,6 +594,19 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->cycle_limit == 0 || request->timeout_ms == 0) {
         return "machine, cycles, and timeout-ms are required";
     }
+    if((request->series.path!=NULL)!=(request->series.count!=0) ||
+       (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
+    if(request->series.path && request->machine!=MACHINE_MAC128K) return "capture-series is supported on mac128k and nes";
+    if(request->series.path && (request->live_scale || request->mouse_replay_path)) return "capture-series requires scheduled, not live or replay, input";
+    if(request->series.memory.length && (request->series.memory.address>=MAC128K_RAM_SIZE ||
+       request->series.memory.length>MAC128K_RAM_SIZE-request->series.memory.address)) return "capture-memory must stay in Mac RAM";
+    if(request->keyboard_witness_range_set && !request->keyboard_witness_path) return "keyboard witness range requires keyboard witness";
+    if(request->keyboard_witness_path && request->machine!=MACHINE_MAC128K) return "keyboard witness requires mac128k";
+    if(!request->keyboard_witness_range_set) request->keyboard_witness_last=MAX_CYCLES;
+    if((request->display_witness_range_set || request->display_witness_memory.length) && !request->display_witness_path) return "display witness filters require display witness";
+    if(request->display_witness_path && request->machine!=MACHINE_MAC128K) return "display witness requires mac128k";
+    if(!request->display_witness_range_set) request->display_witness_last=MAX_CYCLES;
+    request->series.relative=request->input_after.width && request->series.mode==1;
     if (!request->video_path && (request->video_fps_set || request->video_limit_set || request->video_start_set))
         return "video settings require video";
     if (!request->video_fps_set) request->video_fps = 10;
@@ -568,7 +660,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->window_input && (request->live_scale || request->relative_motion || request->mouse_replay_path)) {
         return "window-mouse cannot be mixed with live, relative motion or replay";
     }
-    if (request->input_after.width && (!request->input_event_count || request->live_scale || request->mouse_replay_path)) {
+    if (request->input_after.width && ((!request->input_event_count && !(request->series.count && request->series.mode==1)) || request->live_scale || request->mouse_replay_path)) {
         return "input-after requires scheduled input without live input or replay";
     }
     if (request->machine == MACHINE_MAC128K) {
@@ -663,6 +755,135 @@ static bool write_new_file(const wchar_t *path, const char *header, DWORD header
         success = false;
     }
     return success;
+}
+
+static bool series_allocate(struct frame_series *s,size_t frame_size)
+{
+    if(!s->path) return true;
+    s->capacity=s->count*(frame_size+32);
+    s->data=malloc(s->capacity);
+    return s->data!=NULL;
+}
+static bool hash_buffer(const uint8_t *bytes,DWORD size,uint8_t digest[32])
+{
+    BCRYPT_ALG_HANDLE alg=NULL;
+    if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0) return false;
+    bool ok=BCryptHash(alg,NULL,0,(uint8_t *)bytes,size,digest,32)>=0;
+    BCryptCloseAlgorithmProvider(alg,0);return ok;
+}
+static bool series_identity(struct frame_series *s,const uint8_t rom_digest[32])
+{
+    if(!s->path) return true;
+    wchar_t *path=malloc(32768*sizeof(*path));if(!path) return false;
+    DWORD n=GetModuleFileNameW(NULL,path,32768);
+    if(!n || n>=32768) {free(path);return false;}
+    HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    free(path);if(file==INVALID_HANDLE_VALUE) return false;
+    BCRYPT_ALG_HANDLE alg=NULL;BCRYPT_HASH_HANDLE hash=NULL;bool ok=false;
+    if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)>=0 &&
+       BCryptCreateHash(alg,&hash,NULL,0,NULL,0,0)>=0) {
+        uint8_t bytes[65536];DWORD got=0;bool read_ok=true;
+        do {
+            if(!ReadFile(file,bytes,sizeof(bytes),&got,NULL)) {read_ok=false;break;}
+            if(got && BCryptHashData(hash,bytes,got,0)<0) {read_ok=false;break;}
+        } while(got);
+        if(read_ok && BCryptFinishHash(hash,s->executable_sha256,32,0)>=0) ok=true;
+    }
+    if(hash) BCryptDestroyHash(hash);
+    if(alg) BCryptCloseAlgorithmProvider(alg,0);
+    CloseHandle(file);
+    if(ok) {memcpy(s->rom_sha256,rom_digest,32);s->identity_set=true;}
+    return ok;
+}
+static struct series_sample *series_capture(struct frame_series *s,uint64_t target,uint64_t cycle,
+                                             uint64_t frame,uint64_t step,size_t inputs,
+                                             const char *header,const uint8_t *pixels,size_t size)
+{
+    struct series_sample *sample=&s->samples[s->completed++];
+    sample->target=target;sample->cycle=cycle;sample->frame=frame;sample->step=step;sample->inputs=inputs;
+    if(pixels) {
+        size_t head=strlen(header);sample->image_available=true;sample->offset=s->used;sample->size=(uint32_t)(head+size);
+        memcpy(s->data+s->used,header,head);s->used+=head;
+        memcpy(s->data+s->used,pixels,size);s->used+=size;
+    }
+    return sample;
+}
+static void series_hex(const uint8_t *bytes,uint32_t length)
+{
+    for(uint32_t i=0;i<length;i++) printf("%02x",(unsigned)bytes[i]);
+}
+static void print_series(const struct frame_series *s,bool is_nes)
+{
+    if(!s || !s->path) return;
+    size_t missing=0;for(size_t i=0;i<s->completed;i++) if(!s->samples[i].image_available) ++missing;
+    printf(",\"frame_series\":{\"format\":\"concatenated_%s\",\"axis\":\"%s\",\"relative_to_readiness\":%s,\"written\":%s,\"requested\":%zu,\"processed\":%zu,\"pending\":%zu,\"missing_images\":%zu,\"dropped\":0,\"bytes\":%zu",
+           is_nes?"ppm":"pbm",s->mode==1?"cycle":is_nes?"frame":"vbl",s->relative?"true":"false",
+           s->written?"true":"false",s->count,s->completed,s->count-s->completed,missing,s->used);
+    if(s->identity_set) {
+        fputs(",\"rom_sha256\":\"",stdout);series_hex(s->rom_sha256,32);
+        fputs("\",\"executable_sha256\":\"",stdout);series_hex(s->executable_sha256,32);putchar('"');
+    }
+    fputs(",\"samples\":[",stdout);
+    for(size_t i=0;i<s->count;i++) {
+        if(i) putchar(',');
+        printf("{\"requested\":%u,\"processed\":%s",s->points[i],i<s->completed?"true":"false");
+        if(i<s->completed) {
+            const struct series_sample *v=&s->samples[i];
+            printf(",\"target\":%" PRIu64 ",\"cycle\":%" PRIu64 ",\"frame\":%" PRIu64,
+                   v->target,v->cycle,v->frame);
+            if(is_nes) printf(",\"step\":%" PRIu64,v->step);
+            printf(",\"inputs_accepted_before\":%zu,\"image_available\":%s",v->inputs,v->image_available?"true":"false");
+            if(v->image_available) printf(",\"offset\":%" PRIu64 ",\"length\":%u",v->offset,v->size);
+            if(s->memory.length) {printf(",\"memory\":{\"address\":%u,\"bytes\":\"",s->memory.address);series_hex(v->memory,s->memory.length);fputs("\"}",stdout);}
+            if(s->ppu.length) {printf(",\"ppu\":{\"address\":%u,\"bytes\":\"",s->ppu.address);series_hex(v->ppu,s->ppu.length);fputs("\"}",stdout);}
+            if(s->oam.length) {printf(",\"oam\":{\"address\":%u,\"bytes\":\"",s->oam.address);series_hex(v->oam,s->oam.length);fputs("\"}",stdout);}
+        }
+        putchar('}');
+    }
+    fputs("]}",stdout);
+}
+
+static bool write_keyboard_witness(const mac128k *machine,const struct request *request,
+                                   uint64_t stop,struct keyboard_summary *summary)
+{
+    static const char *const names[]={"queued","rejected","mode","shift_write","command_complete",
+                                      "reply_begin","reply_complete","key_delivered","shift_read","input_due"};
+    const mac128k_keyboard_event *events=mac128k_keyboard_witness(machine,&summary->count,&summary->dropped,&summary->rejected);
+    size_t capacity=256+summary->count*140;char *data=malloc(capacity);if(!data) return false;
+    int len=snprintf(data,capacity,"BHMACKEY1 %u %u %" PRIu64 " %zu %" PRIu64 " %" PRIu64 "\ncycle pc kind value queue due\n",
+                     request->keyboard_witness_first,request->keyboard_witness_last,stop,summary->count,summary->dropped,summary->rejected);
+    if(len<0 || (size_t)len>=capacity) {free(data);return false;}
+    size_t used=(size_t)len;
+    for(size_t i=0;i<summary->count;i++) {
+        const mac128k_keyboard_event *e=&events[i];
+        len=snprintf(data+used,capacity-used,"%" PRIu64 " %u %s %u %u %" PRIu64 "\n",e->cycle,e->pc,
+                     e->kind<10?names[e->kind]:"unknown",e->value,e->queue,e->due);
+        if(len<0 || (size_t)len>=capacity-used) {free(data);return false;}
+        used+=(size_t)len;
+    }
+    bool ok=write_new_file(request->keyboard_witness_path,"",0,(const uint8_t *)data,(DWORD)used);
+    free(data);return ok;
+}
+static bool write_display_witness(const mac128k *machine,const struct request *request,
+                                  uint64_t stop,struct display_summary *summary)
+{
+    static const char *const names[]={"vbl","write","fault"};
+    const mac128k_display_event *events=mac128k_display_witness(machine,&summary->count,&summary->dropped);
+    size_t capacity=256+summary->count*160;char *data=malloc(capacity);if(!data) return false;
+    int len=snprintf(data,capacity,"BHMACDISPLAY1 %u %u %" PRIu64 " %zu %" PRIu64 " %u %u\ncycle vbl pc kind address value width\n",
+                     request->display_witness_first,request->display_witness_last,stop,summary->count,summary->dropped,
+                     request->display_witness_memory.address,request->display_witness_memory.length);
+    if(len<0 || (size_t)len>=capacity) {free(data);return false;}
+    size_t used=(size_t)len;
+    for(size_t i=0;i<summary->count;i++) {
+        const mac128k_display_event *e=&events[i];
+        len=snprintf(data+used,capacity-used,"%" PRIu64 " %" PRIu64 " %u %s %u %u %u\n",
+                     e->cycle,e->vbl,e->pc,e->kind<3?names[e->kind]:"unknown",e->address,e->value,e->width);
+        if(len<0 || (size_t)len>=capacity-used) {free(data);return false;}
+        used+=(size_t)len;
+    }
+    bool ok=write_new_file(request->display_witness_path,"",0,(const uint8_t *)data,(DWORD)used);
+    free(data);return ok;
 }
 
 static bool write_mouse_witness(const mac128k *mac, const struct request *request,
@@ -924,7 +1145,9 @@ static bool matches(const struct machine *machine, struct predicate until)
 static void print_result(const char *status, enum machine_kind machine,
                          struct machine_state state, const char *error,
                          const uint8_t *bytes, const struct inspection *inspect, size_t inspect_count,
-                         const struct mouse_session *mouse, const video_capture *video)
+                         const struct mouse_session *mouse, const video_capture *video,
+                         const struct frame_series *series,const struct keyboard_summary *keyboard,
+                         const struct display_summary *display)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
@@ -963,6 +1186,21 @@ static void print_result(const char *status, enum machine_kind machine,
         if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
         printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
     }
+    if(keyboard) printf(",\"keyboard_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"rejected\":%" PRIu64 ",\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu,\"limit\":8192}",
+                        keyboard->count,keyboard->dropped,keyboard->rejected,keyboard->scheduled,keyboard->accepted,keyboard->scheduled-keyboard->accepted);
+    if(display) printf(",\"display_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"limit\":8192}",display->count,display->dropped);
+    if(series && series->path && mouse && mouse->request) {
+        static const char *const kinds[]={"button","phase","motion","key","scancode","window"};
+        printf(",\"series_inputs\":{\"relative_to_readiness\":%s,\"events\":[",mouse->readiness_requested?"true":"false");
+        for(size_t i=0;i<mouse->request->input_event_count;i++) {
+            const struct input_event *e=&mouse->request->input_events[i];if(i) putchar(',');
+            printf("{\"kind\":\"%s\",\"requested\":%u,\"first\":%d,\"second\":%d,\"action\":%u,\"accepted\":%s",
+                   kinds[e->kind],e->cycle,e->first,e->second,e->action,i<mouse->scheduled_accepted?"true":"false");
+            if(i<mouse->scheduled_accepted) printf(",\"actual_cycle\":%" PRIu64,mouse->event_cycles[i]);
+            putchar('}');
+        }
+        fputs("]}",stdout);
+    }
     if (video != NULL) {
         printf(",\"video\":{\"format\":\"y4m\",\"width\":%" PRIu32 ",\"height\":%" PRIu32
                ",\"fps\":%" PRIu32 ",\"start_cycle\":%" PRIu64 ",\"frames\":%" PRIu32
@@ -983,13 +1221,14 @@ static void print_result(const char *status, enum machine_kind machine,
         }
         if (inspect_count > 1) { putchar(']'); }
     }
+    print_series(series,false);
     fputs("}\n", stdout);
 }
 
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -1082,7 +1321,8 @@ static bool enqueue_replay_samples(struct mouse_session *mouse, uint64_t through
 }
 
 static struct run_result run_machine(struct machine *machine, const struct request *request,
-                                     struct mouse_session *mouse, HANDLE cancel_event, video_capture *video)
+                                     struct mouse_session *mouse, HANDLE cancel_event, video_capture *video,
+                                     struct frame_series *series)
 {
     LARGE_INTEGER frequency, start;
     if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&start)) {
@@ -1144,6 +1384,14 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             mouse->ready = true;
             mouse->ready_cycle = state.cycles;
         }
+        while(series->completed<series->count && (!series->relative || mouse->ready)) {
+            uint64_t target=series->points[series->completed]+(series->relative?mouse->ready_cycle:0);
+            if((series->mode==1?state.cycles:state.vbl)<target) break;
+            struct series_sample *sample=series_capture(series,target,state.cycles,state.vbl,0,mouse->scheduled_accepted,
+                                                       "P4\n512 342\n",mac128k_frame(machine->mac),MAC128K_FRAME_SIZE);
+            if(series->memory.length && !read_ram(machine,series->memory.address,sample->memory,series->memory.length))
+                return (struct run_result){"error","cannot read series memory",2};
+        }
         if ((request->stop_at_pc && state.pc == request->target_pc) ||
             (request->stop_at_post && state.post_written && state.post == request->target_post) ||
             matches(machine, request->until)) {
@@ -1190,6 +1438,8 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                (!mouse->readiness_requested || mouse->ready) &&
                (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle <= state.cycles) {
             const struct input_event event = request->input_events[next_event];
+            if(machine->mac && request->keyboard_witness_path && event.kind==INPUT_MAC_KEY)
+                mac128k_keyboard_input_due(machine->mac,(uint64_t)event.cycle+mouse->ready_cycle,(uint8_t)event.first,event.second!=0);
             if (machine->mac != NULL && (event.kind == INPUT_BUTTON || event.kind == INPUT_MOTION ||
                                         event.kind == INPUT_PHASE || event.kind == INPUT_WINDOW)) {
                 mouse->source = event.kind == INPUT_WINDOW ? 2 : 1;
@@ -1207,6 +1457,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                 }
                 return (struct run_result){"machine_fault", "guest keyboard rejected an input event", 1};
             }
+            mouse->event_cycles[next_event]=state.cycles;
             ++next_event;
             mouse->scheduled_accepted = next_event;
             if (machine->pc != NULL && next_event == request->input_event_count) {
@@ -1249,6 +1500,10 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             slice = slice_before(slice, previous_cycles, (uint64_t)request->input_events[next_event].cycle + mouse->ready_cycle);
         }
         if (mouse->readiness_requested && !mouse->ready) { slice = 1; }
+        if(series->completed<series->count && (!series->relative || mouse->ready)) {
+            if(series->mode==2) slice=1;
+            else slice=slice_before(slice,previous_cycles,series->points[series->completed]+(series->relative?mouse->ready_cycle:0));
+        }
         if (mouse->replay_index < replay_count) {
             slice = slice_before(slice, previous_cycles, replay[mouse->replay_index].cycle);
         }
@@ -1289,6 +1544,9 @@ static const char *create_machine(struct machine *machine, const struct request 
     if (error == NULL) {
         error = read_image(request->ega_font_path, &ega_font, 256 * 14, 256 * 14,
                            "EGA font must contain 3584 bytes");
+    }
+    if (error == NULL) {
+        if(request->series.path && !hash_buffer(rom.bytes,rom.size,machine->rom_sha256)) error="cannot hash system ROM for frame series";
     }
     if (error == NULL) {
         if (mac) {
@@ -1444,6 +1702,7 @@ static int run_nes(int argc, wchar_t **argv)
     const wchar_t *path=NULL,*frame_path=NULL,*audio_path=NULL,*video_path=NULL,*controller_witness_path=NULL;
     uint32_t steps=0, timeout=0, target=0, fields[3], ppu_addr=0, ppu_len=0, oam_addr=0, oam_len=0;
     struct {uint32_t address,length;} inspections[8];size_t inspection_count=0;
+    struct frame_series series={0};
     struct nes_observation {uint32_t cycle,address,length; uint64_t actual_cycle,step,frame; uint8_t bytes[256];} observations[32];
     size_t observation_count=0,next_observation=0;
     bool machine_seen=false, target_set=false, controller_set[2]={false,false}, region_set=false;
@@ -1462,6 +1721,9 @@ static int run_nes(int argc, wchar_t **argv)
     if (argc%2==0) return request_error("expected pairs of options and values");
     for(int i=1;i<argc;i+=2) {
         const wchar_t *o=argv[i],*v=argv[i+1];
+        int series_option=parse_series_option(&series,o,v,true);
+        if(series_option<0) return request_error("invalid or repeated capture-series option");
+        if(series_option>0) continue;
         if(wcscmp(o,L"--machine")==0 && !machine_seen && wcscmp(v,L"nes")==0) machine_seen=true;
         else if(wcscmp(o,L"--rom")==0 && !path && *v) path=v;
         else if(wcscmp(o,L"--frame")==0 && !frame_path && *v) frame_path=v;
@@ -1515,6 +1777,12 @@ static int run_nes(int argc, wchar_t **argv)
         else return request_error("invalid, unsupported, or repeated NES option");
     }
     if(!machine_seen || !path || !steps || !timeout) return request_error("nes requires --rom, --steps, and --timeout-ms");
+    if((series.path!=NULL)!=(series.count!=0) || ((series.memory.length||series.ppu.length||series.oam.length) && !series.path)) return request_error("capture-series requires one or more capture points");
+    if(series.memory.length && !((series.memory.address<0x2000 && series.memory.length<=0x2000-series.memory.address) ||
+       (series.memory.address>=0x8000 && series.memory.address<=0xffff && series.memory.length<=0x10000-series.memory.address))) return request_error("NES capture-memory must stay in RAM or PRG ROM");
+    if(series.ppu.length && (series.ppu.address>=0x4000 || series.ppu.length>0x4000-series.ppu.address)) return request_error("NES capture-ppu must stay in PPU address space");
+    if(series.oam.length && (series.oam.address>=256 || series.oam.length>256-series.oam.address)) return request_error("NES capture-oam must stay in OAM");
+    series.relative=readiness_set && series.mode==1;
     if(event_mode==0 && event_count && events[event_count-1].step>=steps) return request_error("NES controller events must precede the step limit");
     if((unsigned)target_set+(unsigned)until_cycle_set+(unsigned)until_frame_set+(unsigned)until_ready_cycle_set>1) return request_error("NES accepts only one stop condition");
     if(readiness_set && event_mode==0) return request_error("NES input-after cannot use an instruction-based controller schedule");
@@ -1535,6 +1803,8 @@ static int run_nes(int argc, wchar_t **argv)
     BCryptCloseAlgorithmProvider(alg,0);
     nes *n=nes_create_region(rom.bytes,rom.size,region,&error);free(rom.bytes);
     if(!n) return request_error(error);
+    if(!series_identity(&series,digest)) {nes_destroy(n);return request_error("cannot identify executable for frame series");}
+    if(!series_allocate(&series,256u*240u*3u)) {nes_destroy(n);return request_error("cannot allocate frame series");}
     if(controller_witness_path && !nes_enable_controller_witness(n,controller_witness_first,controller_witness_last)) {nes_destroy(n);return request_error("cannot allocate NES controller witness");}
     nes_set_controller(n,0,(uint8_t)controller[0]);nes_set_controller(n,1,(uint8_t)controller[1]);
     nes_cartridge_info cartridge=nes_get_cartridge_info(n);
@@ -1562,6 +1832,16 @@ static int run_nes(int argc, wchar_t **argv)
             struct nes_observation *obs=&observations[next_observation];
             if(!nes_inspect(n,(uint16_t)obs->address,obs->bytes,obs->length)) {status="error";rc=2;break;}
             obs->actual_cycle=s.cpu_cycles;obs->step=s.steps;obs->frame=s.ppu_frames;++next_observation;
+        }
+        if(rc==2) break;
+        while(series.completed<series.count && (!series.relative || ready)) {
+            uint64_t point=series.points[series.completed]+(series.relative?ready_cycle:0);
+            if((series.mode==1?s.cpu_cycles:s.ppu_frames)<point) break;
+            struct series_sample *sample=series_capture(&series,point,s.cpu_cycles,s.ppu_frames,s.steps,next_event,
+                                                        "P6\n256 240\n255\n",nes_frame(n),256u*240u*3u);
+            if((series.memory.length && !nes_inspect(n,(uint16_t)series.memory.address,sample->memory,series.memory.length)) ||
+               (series.ppu.length && !nes_inspect_ppu(n,(uint16_t)series.ppu.address,sample->ppu,series.ppu.length)) ||
+               (series.oam.length && !nes_inspect_oam(n,(uint16_t)series.oam.address,sample->oam,series.oam.length))) {status="error";rc=2;break;}
         }
         if(rc==2) break;
         if((target_set && s.pc==target) || (until_cycle_set && s.cpu_cycles>=until_cycle) || (until_frame_set && s.ppu_frames>=until_frame) ||
@@ -1607,6 +1887,10 @@ static int run_nes(int argc, wchar_t **argv)
     if(controller_witness_path && !write_nes_controller_witness(controller_witness_path,n,controller_witness_first,controller_witness_last,state.cpu_cycles,&witness_count,&witness_dropped)) {
         nes_destroy(n);return request_error("cannot create NES controller witness");
     }
+    if(series.path) {
+        series.written=write_new_file(series.path,"",0,series.data,(DWORD)series.used);
+        if(!series.written) {nes_destroy(n);free(series.data);return request_error("cannot create or write frame series");}
+    }
     printf("{\"status\":\"%s\",\"machine\":\"nes\",\"profile\":\"%s\","
            "\"steps\":%" PRIu64 ",\"cpu_cycles\":%" PRIu64 ",\"ppu_frames\":%" PRIu64
            ",\"audio_captured\":%s,\"audio_samples\":%zu,\"audio_truncated\":%s,\"dmc_used\":%s,\"apu_writes\":%" PRIu64 ",\"oam_dma\":%" PRIu64
@@ -1647,7 +1931,7 @@ static int run_nes(int argc, wchar_t **argv)
         }
         fputs("]}",stdout);
     }
-    if(controller_timing) {
+    if(controller_timing || (series.path && event_mode==0)) {
         fputs(",\"instruction_schedule\":{\"events\":[",stdout);
         for(size_t i=0;i<event_count;i++) {
             if(i) putchar(',');
@@ -1679,7 +1963,9 @@ static int run_nes(int argc, wchar_t **argv)
     if(inspection_count>1) {fputs(",\"memory_regions\":[",stdout);for(size_t j=0;j<inspection_count;j++){if(j)putchar(',');printf("{\"address\":%u,\"bytes\":\"",inspections[j].address);for(uint32_t i=0;i<inspections[j].length;i++)printf("%02x",bytes[j][i]);fputs("\"}",stdout);}putchar(']');}
     if(ppu_len) {printf(",\"ppu_memory\":{\"address\":%u,\"bytes\":\"",ppu_addr);for(uint32_t i=0;i<ppu_len;i++)printf("%02x",ppu_bytes[i]);fputs("\"}",stdout);}
     if(oam_len) {printf(",\"oam\":{\"address\":%u,\"bytes\":\"",oam_addr);for(uint32_t i=0;i<oam_len;i++)printf("%02x",oam_bytes[i]);fputs("\"}",stdout);}
-    puts("}");nes_destroy(n);return rc;
+    if(series.path) printf(",\"series_initial_controllers\":[%u,%u]",controller[0],controller[1]);
+    print_series(&series,true);
+    puts("}");nes_destroy(n);free(series.data);return rc;
 }
 
 /* This only queries the Windows API; it neither creates nor runs a guest. */
@@ -1766,6 +2052,8 @@ int wmain(int argc, wchar_t **argv)
              "  [--input-after ADDRESS:WIDTH:VALUE] [--until-cycle CYCLE | --until-frame FRAME | --until-input-cycle OFFSET | --until-pc ADDRESS]\n"
              "  [--observe-cycle CYCLE:ADDRESS:LENGTH] [--controller-timing 1] [--controller-witness PATH] [--controller-witness-cycles FIRST:LAST]\n"
              "  [--inspect ADDRESS:LENGTH] [--inspect-ppu ADDRESS:LENGTH] [--inspect-oam ADDRESS:LENGTH] [--frame PATH] [--audio PATH] [--video PATH]\n"
+             "Capture series: --capture-series PATH (--capture-cycle CYCLE | NES --capture-frame N | Mac --capture-vbl N) [--capture-memory ADDRESS:LENGTH]\n"
+             "  NES also supports --capture-ppu ADDRESS:LENGTH and --capture-oam OFFSET:LENGTH; up to 32 points.\n"
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
@@ -1777,6 +2065,8 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
              "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
+             "  --keyboard-witness PATH [--keyboard-witness-range FIRST:LAST]\n"
+             "  --display-witness PATH [--display-witness-range FIRST:LAST] [--display-witness-memory ADDRESS:LENGTH]\n"
              "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-witness-memory ADDRESS:LENGTH\n"
              "  --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
@@ -1812,6 +2102,13 @@ int wmain(int argc, wchar_t **argv)
         !mac128k_mouse_witness_memory(machine.mac, request.mouse_witness_memory.address,
                                       request.mouse_witness_memory.length))
         error = "cannot initialize mouse witness RAM filter";
+    if(error==NULL && request.keyboard_witness_path &&
+       !mac128k_start_keyboard_witness(machine.mac,request.keyboard_witness_first,request.keyboard_witness_last))
+        error="cannot initialize keyboard witness";
+    if(error==NULL && request.display_witness_path &&
+       !mac128k_start_display_witness(machine.mac,request.display_witness_first,request.display_witness_last,
+                                     request.display_witness_memory.address,request.display_witness_memory.length))
+        error="cannot initialize display witness";
     if (error == NULL && request.pc_witness_path != NULL &&
         !pc286_start_witness(machine.pc, request.pc_witness_memory.address,
                              request.pc_witness_memory.address + request.pc_witness_memory.length,
@@ -1834,6 +2131,7 @@ int wmain(int argc, wchar_t **argv)
     }
     struct mouse_session mouse = {0};
     mouse.mac = machine.mac;
+    mouse.request = &request;
     mouse.witness_detail = request.mouse_witness_detail;
     error = open_mouse_session(&mouse, &request);
     if (error != NULL) {
@@ -1844,6 +2142,10 @@ int wmain(int argc, wchar_t **argv)
         destroy_machine(&machine);
         return request_error(error);
     }
+    if(!series_identity(&request.series,machine.rom_sha256) || !series_allocate(&request.series,MAC128K_FRAME_SIZE)) {
+        close_mouse_session(&mouse);if(cancel_event) CloseHandle(cancel_event);destroy_machine(&machine);
+        return request_error("cannot allocate frame series");
+    }
     video_capture capture = {0};
     video_capture *video = NULL;
     if (request.video_path != NULL) {
@@ -1851,13 +2153,14 @@ int wmain(int argc, wchar_t **argv)
                         request.video_fps, request.video_limit, request.video_start)) {
             close_mouse_session(&mouse);
             if (cancel_event != NULL) CloseHandle(cancel_event);
+            free(request.series.data);
             destroy_machine(&machine);
             return request_error("cannot create or initialize requested video");
         }
         video = &capture;
     }
     const BOOL console_handler = SetConsoleCtrlHandler(on_console_event, TRUE);
-    struct run_result result = run_machine(&machine, &request, &mouse, cancel_event, video);
+    struct run_result result = run_machine(&machine, &request, &mouse, cancel_event, video, &request.series);
     if (video != NULL && !video_finish(video, video->failed))
         result = (struct run_result){"error", "cannot close requested video", 2};
     if (mouse.window != NULL) {
@@ -1903,8 +2206,25 @@ int wmain(int argc, wchar_t **argv)
     if (request.pc_witness_path != NULL && !write_pc_witness(machine.pc, &request, state.cycles)) {
         result = (struct run_result){"error", "cannot create or write requested 286 witness", 2};
     }
+    struct keyboard_summary keyboard={0};
+    if(request.keyboard_witness_path) {
+        for(size_t i=0;i<request.input_event_count;i++) if(request.input_events[i].kind==INPUT_MAC_KEY) {
+            ++keyboard.scheduled;if(i<mouse.scheduled_accepted) ++keyboard.accepted;
+        }
+        if(!write_keyboard_witness(machine.mac,&request,state.cycles,&keyboard))
+            result=(struct run_result){"error","cannot create or write keyboard witness",2};
+    }
+    struct display_summary display={0};
+    if(request.display_witness_path && !write_display_witness(machine.mac,&request,state.cycles,&display))
+        result=(struct run_result){"error","cannot create or write display witness",2};
+    if(request.series.path) {
+        request.series.written=write_new_file(request.series.path,"",0,request.series.data,(DWORD)request.series.used);
+        if(!request.series.written) result=(struct run_result){"error","cannot create or write frame series",2};
+    }
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
-                 &mouse, video);
+                 &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
+                 request.display_witness_path?&display:NULL);
+    free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);
     if (console_handler) {

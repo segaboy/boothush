@@ -10,6 +10,8 @@ The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK 
 
 The experimental [NES target](docs/nes.md) runs supported NROM and NES 2.0 mapper-2/submapper-1 cartridges headlessly, with NTSC/PAL timing models, independent scheduled input for both controllers, cycle-aligned input and memory observations, and approximate PPU and audio capture. CPU, graphics, audio and cartridge compatibility remain incomplete.
 
+The [capture guide](docs/headless-capture.md) describes bounded, indexed NES and Mac frame series. The Mac profile also has opt-in [keyboard](docs/mac-keyboard.md) and display witnesses for guest input and redraw diagnostics.
+
 Other Windows applications can embed that same core using the experimental [NES C library and API](docs/nes-api.md). The build installs a DLL, C header and CMake package; an independent consumer example is included.
 
 `--map-x64-media DISK --load-base ADDRESS` additionally extracts the EFI file from the validated disk and constructs a relocated PE32+ image in host memory for inspection. It does not execute a guest.
@@ -47,6 +49,8 @@ Choose a writable build directory. To build the executable without Python, add `
 - Set `BOOTHUSH_CLASSICK_LIVE_ROM` to the 2026-11-12 anchored ClasSICK candidate with SHA-256 `faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c`. The native mouse integration test sends messages to an invisible BootHush window and verifies the four corners, two title-bar drags, release, and a content click against the ROM's RAM diagnostics and framebuffer.
 - Set `BOOTHUSH_FREEDOS_FLOPPY` to `120m/x86BOOT.img` from the [official FreeDOS 1.4 Floppy Edition](https://www.freedos.org/download/). The test verifies the boot image SHA-256, selects a language with a scheduled Enter, and checks the installer prompt.
 - Set both `BOOTHUSH_CLASSICK_X64_DISK` and `BOOTHUSH_CLASSICK_X64_EFI` to enable the optional pinned ClasSICK x64 media inspection test. It validates and compares the media without running it.
+- Set `BOOTHUSH_STB_UNROM` to the user-supplied, hash-pinned Super Tilt Bro beta ROM to exercise cycle-aligned controller and multi-frame capture scenarios. Its source revision is unknown; no ROM is distributed here.
+- Set `BOOTHUSH_STB_MAC_PROBE` to the independently generated port controls ROM (SHA-256 `31b2666be66ac7a02d576998cb9b46aec3a91245d16679877d593748fd581fc6`) to verify keyboard delivery and VBL-indexed capture against the port's probe.
 
 ## Local process API
 

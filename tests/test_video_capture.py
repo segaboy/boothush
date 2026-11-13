@@ -6,11 +6,100 @@ import subprocess
 import sys
 import unittest
 
-from test_boot import BootHushTestCase
+from test_boot import BootHushTestCase, make_rom
 from test_pc286 import make_rom as make_pc_rom
 
 
 class VideoCaptureTests(BootHushTestCase):
+    def test_mac_display_witness_vbl_framebuffer_and_fault(self):
+        trace=self.scratch/'display.txt';series=self.scratch/'display.pbm'
+        plain=self.boot(cycles=280000)
+        result=self.boot('--display-witness',trace,'--display-witness-memory','0x1a700:1',
+                         '--capture-series',series,'--capture-vbl','1','--capture-vbl','2',
+                         '--capture-memory','0x1a700:1',cycles=280000)
+        info=result.pop('display_witness');frames=result.pop('frame_series');result.pop('series_inputs')
+        self.assertEqual(result,plain);self.assertEqual(info['dropped'],0)
+        rows=[x.split() for x in trace.read_text().splitlines()[2:]]
+        self.assertTrue(any(r[3]=='write' and int(r[4])==0x1a700 and int(r[5])==0x80 for r in rows))
+        vbl=[r for r in rows if r[3]=='vbl'];self.assertGreaterEqual(len(vbl),2)
+        for sample,row in zip(frames['samples'],vbl):
+            self.assertEqual(sample['frame'],int(row[1]));self.assertGreaterEqual(sample['cycle'],int(row[0]))
+            self.assertEqual(sample['memory']['bytes'],'80')
+        before=trace.read_bytes()
+        self.boot('--display-witness',trace,cycles=2000,exit_code=2);self.assertEqual(trace.read_bytes(),before)
+        self.rom.write_bytes(make_rom(bytes.fromhex('13fc000100800000 60fe')))
+        fault=self.scratch/'fault.txt';r=self.boot('--display-witness',fault,exit_code=1)
+        self.assertEqual(r['status'],'machine_fault');self.assertIn(' fault ',fault.read_text())
+        self.boot('--display-witness-memory','0x1a700:1',exit_code=2)
+
+    def test_display_witness_reports_overflow(self):
+        self.rom.write_bytes(make_rom(bytes.fromhex('13fc000000effffe 13fc001000efe7fe 13fc00800001a700 60f6')))
+        path=self.scratch/'full-display.txt'
+        r=self.boot('--display-witness',path,'--display-witness-memory','0x1a700:1',cycles=1000000)
+        self.assertEqual(r['display_witness']['events'],8192)
+        self.assertGreater(r['display_witness']['dropped'],0)
+
+    def test_mac_frame_series_cycles_vbl_and_readiness(self):
+        path=self.scratch/'series.pbm'; repeated=self.scratch/'repeat.pbm'
+        def run(p):
+            return self.boot('--capture-series',p,'--capture-cycle','0','--capture-cycle','100',
+                             '--capture-cycle','100000','--capture-cycle','280000',
+                             '--capture-memory','0xb00:4','--key','100:0:1',cycles=280000)
+        first=run(path); second=run(repeated)
+        self.assertEqual(first,second);self.assertEqual(path.read_bytes(),repeated.read_bytes())
+        series=first['frame_series']; samples=series['samples']; payload=path.read_bytes()
+        self.assertEqual(series['rom_sha256'],hashlib.sha256(self.rom.read_bytes()).hexdigest())
+        self.assertEqual(series['executable_sha256'],hashlib.sha256(self.exe.read_bytes()).hexdigest())
+        self.assertEqual((series['requested'],series['processed'],series['pending']),(4,4,0))
+        self.assertTrue(series['written']);self.assertEqual(samples[0]['memory']['bytes'],'00000000')
+        self.assertEqual(samples[2]['memory']['bytes'],'1234abcd')
+        self.assertEqual(samples[1]['inputs_accepted_before'],0)
+        self.assertEqual(samples[2]['inputs_accepted_before'],1)
+        self.assertEqual(first['series_inputs']['events'][0]['kind'],'key')
+        self.assertEqual(first['series_inputs']['events'][0]['requested'],100)
+        for sample in samples:
+            self.assertGreaterEqual(sample['cycle'],sample['target'])
+            image=payload[sample['offset']:sample['offset']+sample['length']]
+            self.assertEqual(len(image),len(b'P4\n512 342\n')+64*342)
+            self.assertTrue(image.startswith(b'P4\n512 342\n'))
+        manifest=self.scratch/'result.json';manifest.write_text(json.dumps(first),encoding='utf-8')
+        destination=self.scratch/'extracted'
+        helper=Path(__file__).resolve().parents[1]/'scripts'/'extract_frame_series.py'
+        cmd=[sys.executable,helper,'--result',manifest,'--series',path,'--output',destination]
+        extraction=subprocess.run(cmd,capture_output=True,text=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(extraction.returncode,0,extraction.stdout+extraction.stderr)
+        self.assertEqual(len(list(destination.glob('*.pbm'))),4)
+        self.assertEqual(json.loads((destination/'manifest.json').read_text()),first)
+        self.assertNotEqual(subprocess.run(cmd,capture_output=True).returncode,0)
+        corrupt=self.scratch/'corrupt.pbm';corrupt.write_bytes(b'X'+path.read_bytes()[1:])
+        bad_dest=self.scratch/'corrupt-output'
+        bad=subprocess.run([sys.executable,helper,'--result',manifest,'--series',corrupt,'--output',bad_dest],capture_output=True)
+        self.assertNotEqual(bad.returncode,0);self.assertFalse(bad_dest.exists())
+        before=path.read_bytes();self.boot('--capture-series',path,'--capture-cycle','0',exit_code=2)
+        self.assertEqual(path.read_bytes(),before)
+        vbl=self.boot('--capture-series',self.scratch/'vbl.pbm','--capture-vbl','1',
+                      '--capture-vbl','2',cycles=280000)['frame_series']
+        self.assertEqual([x['frame'] for x in vbl['samples']],[1,2])
+        rel=self.boot('--input-after','0xb00:4:0x1234abcd','--capture-series',self.scratch/'relative.pbm',
+                      '--capture-cycle','0','--capture-memory','0xb00:4',cycles=2000)
+        self.assertTrue(rel['frame_series']['relative_to_readiness'])
+        self.assertEqual(rel['frame_series']['samples'][0]['cycle'],rel['input_schedule']['ready_cycle'])
+        self.assertEqual(rel['frame_series']['samples'][0]['memory']['bytes'],'1234abcd')
+        simultaneous=self.boot('--input-after','0xb00:4:0x1234abcd','--until','0xb00:4:0x1234abcd',
+                               '--key','0:0:1','--capture-series',self.scratch/'stop.pbm','--capture-cycle','0')
+        self.assertEqual(simultaneous['frame_series']['samples'][0]['inputs_accepted_before'],0)
+        self.assertFalse(simultaneous['series_inputs']['events'][0]['accepted'])
+        absent_path=self.scratch/'no-ready.pbm'
+        absent=self.boot('--input-after','0xb00:4:0xdeadbeef','--capture-series',absent_path,
+                         '--capture-cycle','0',cycles=2000,exit_code=1)
+        self.assertEqual((absent['status'],absent['frame_series']['processed'],absent['frame_series']['pending']),('readiness_not_reached',0,1))
+        self.assertEqual(absent_path.read_bytes(),b'')
+        for args in (('--capture-series',self.scratch/'bad'),('--capture-cycle','1'),
+                     ('--capture-series',self.scratch/'bad','--capture-cycle','1','--capture-vbl','1'),
+                     ('--capture-series',self.scratch/'bad','--capture-cycle','1','--capture-memory','0x1ffff:2'),
+                     ('--capture-series',self.scratch/'bad',*(('--capture-cycle','1')*33))):
+            with self.subTest(args=args): self.boot(*args,exit_code=2)
+
     def read_y4m(self, path, width, height):
         data = path.read_bytes()
         header, data = data.split(b'\n', 1)
