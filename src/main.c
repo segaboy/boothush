@@ -1422,12 +1422,14 @@ static int soft_x64_probe(const wchar_t *path, uint32_t steps)
 static int run_nes(int argc, wchar_t **argv)
 {
     const wchar_t *path=NULL,*frame_path=NULL,*audio_path=NULL,*video_path=NULL;
-    uint32_t steps=0, timeout=0, target=0, fields[2], addr=0, len=0;
-    bool machine_seen=false, target_set=false, controller_set=false;
+    uint32_t steps=0, timeout=0, target=0, fields[2], ppu_addr=0, ppu_len=0, oam_addr=0, oam_len=0;
+    struct {uint32_t address,length;} inspections[8];size_t inspection_count=0;
+    bool machine_seen=false, target_set=false, controller_set[2]={false,false}, region_set=false;
     bool video_fps_set=false,video_limit_set=false,video_start_set=false;
     uint32_t video_fps=10,video_limit=300,video_start=0;
-    uint32_t controller=0;
-    struct {uint32_t step,mask;} events[256];
+    uint32_t controller[2]={0,0}, region=0, last_step[2]={0,0};
+    bool have_event[2]={false,false};
+    struct nes_event {uint32_t step,mask,port;} events[256];
     size_t event_count=0, next_event=0;
     if (argc%2==0) return request_error("expected pairs of options and values");
     for(int i=1;i<argc;i+=2) {
@@ -1443,19 +1445,28 @@ static int run_nes(int argc, wchar_t **argv)
         else if(wcscmp(o,L"--steps")==0 && !steps && parse_fields(v,fields,1) && fields[0]>=1 && fields[0]<=100000000) steps=fields[0];
         else if(wcscmp(o,L"--timeout-ms")==0 && !timeout && parse_fields(v,fields,1) && fields[0]>=1 && fields[0]<=MAX_TIMEOUT_MS) timeout=fields[0];
         else if(wcscmp(o,L"--until-pc")==0 && !target_set && parse_fields(v,fields,1) && fields[0]<=0xffff) {target=fields[0];target_set=true;}
-        else if(wcscmp(o,L"--controller1")==0 && !controller_set && parse_fields(v,fields,1) && fields[0]<=255) {controller=fields[0];controller_set=true;}
-        else if(wcscmp(o,L"--controller-event")==0 && event_count<256 && parse_fields(v,fields,2) && fields[1]<=255 &&
-                (!event_count || fields[0]>=events[event_count-1].step)) {
-            events[event_count].step=fields[0];events[event_count].mask=fields[1];++event_count;
+        else if(wcscmp(o,L"--region")==0 && !region_set && (!wcscmp(v,L"auto") || !wcscmp(v,L"ntsc") || !wcscmp(v,L"pal"))) {region=!wcscmp(v,L"pal")?2:!wcscmp(v,L"ntsc")?1:0;region_set=true;}
+        else if((!wcscmp(o,L"--controller1") || !wcscmp(o,L"--controller2")) && parse_fields(v,fields,1) && fields[0]<=255 && !controller_set[!wcscmp(o,L"--controller2")]) {
+            unsigned port=!wcscmp(o,L"--controller2");controller[port]=fields[0];controller_set[port]=true;
         }
-        else if(wcscmp(o,L"--inspect")==0 && !len && parse_fields(v,fields,2) && fields[0]<=0xffff && fields[1]>=1 && fields[1]<=4096 && fields[1]<=0x10000-fields[0]) {addr=fields[0];len=fields[1];}
+        else if((!wcscmp(o,L"--controller-event") || !wcscmp(o,L"--controller2-event")) && event_count<256 && parse_fields(v,fields,2) && fields[1]<=255) {
+            unsigned port=!wcscmp(o,L"--controller2-event");
+            if(have_event[port] && fields[0]<last_step[port]) return request_error("NES controller events must be ordered within each port");
+            last_step[port]=fields[0];have_event[port]=true;
+            size_t pos=event_count++;
+            while(pos && events[pos-1].step>fields[0]) {events[pos]=events[pos-1];--pos;}
+            events[pos]=(struct nes_event){fields[0],fields[1],port};
+        }
+        else if(wcscmp(o,L"--inspect")==0 && inspection_count<8 && parse_fields(v,fields,2) && fields[0]<=0xffff && fields[1]>=1 && fields[1]<=4096 && fields[1]<=0x10000-fields[0]) {inspections[inspection_count].address=fields[0];inspections[inspection_count++].length=fields[1];}
+        else if(wcscmp(o,L"--inspect-ppu")==0 && !ppu_len && parse_fields(v,fields,2) && fields[0]<0x4000 && fields[1]>=1 && fields[1]<=4096 && fields[1]<=0x4000-fields[0]) {ppu_addr=fields[0];ppu_len=fields[1];}
+        else if(wcscmp(o,L"--inspect-oam")==0 && !oam_len && parse_fields(v,fields,2) && fields[0]<256 && fields[1]>=1 && fields[1]<=256-fields[0]) {oam_addr=fields[0];oam_len=fields[1];}
         else return request_error("invalid, unsupported, or repeated NES option");
     }
     if(!machine_seen || !path || !steps || !timeout) return request_error("nes requires --rom, --steps, and --timeout-ms");
     if(event_count && events[event_count-1].step>=steps) return request_error("NES controller events must precede the step limit");
     if(!video_path && (video_fps_set || video_limit_set || video_start_set)) return request_error("NES video settings require video");
     struct image rom={0};
-    const char *error=read_image(path,&rom,16,16+32768+8192,"NES image must fit supported NROM dimensions");
+    const char *error=read_image(path,&rom,16,16+524288+8192,"NES image exceeds supported cartridge dimensions");
     if(error){free(rom.bytes);return request_error(error);}
     uint8_t digest[32]; BCRYPT_ALG_HANDLE alg=NULL;
     if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0 ||
@@ -1465,12 +1476,13 @@ static int run_nes(int argc, wchar_t **argv)
         return request_error("cannot calculate NES cartridge SHA-256");
     }
     BCryptCloseAlgorithmProvider(alg,0);
-    nes *n=nes_create(rom.bytes,rom.size,&error);free(rom.bytes);
+    nes *n=nes_create_region(rom.bytes,rom.size,region,&error);free(rom.bytes);
     if(!n) return request_error(error);
-    nes_set_controller(n,0,(uint8_t)controller);
+    nes_set_controller(n,0,(uint8_t)controller[0]);nes_set_controller(n,1,(uint8_t)controller[1]);
+    nes_cartridge_info cartridge=nes_get_cartridge_info(n);
     if(audio_path && !nes_capture_audio(n)) {nes_destroy(n);return request_error("cannot allocate NES audio capture");}
     video_capture video={0};
-    if(video_path && !video_open_rgb(&video,video_path,256,240,1789773,video_fps,video_limit,video_start)) {
+    if(video_path && !video_open_rgb(&video,video_path,256,240,cartridge.pal?1662607:1789773,video_fps,video_limit,video_start)) {
         nes_destroy(n);return request_error("cannot create NES video capture");
     }
     const ULONGLONG started=GetTickCount64(); const char *status="step_limit"; int rc=0;
@@ -1485,14 +1497,16 @@ static int run_nes(int argc, wchar_t **argv)
         if(s.steps>=steps) {if(target_set){status="condition_not_met";rc=1;}break;}
         if(GetTickCount64()-started>=timeout) {status="timeout";rc=1;break;}
         while(next_event<event_count && events[next_event].step==s.steps) {
-            nes_set_controller(n,0,(uint8_t)events[next_event].mask);++next_event;
+            nes_set_controller(n,events[next_event].port,(uint8_t)events[next_event].mask);++next_event;
         }
         if(!nes_step(n)) {status="machine_fault";rc=1;break;}
     }
     if(video_path && !video_finish(&video,video.failed)) {nes_destroy(n);return request_error("cannot finish NES video capture");}
     if(video.failed) {nes_destroy(n);return request_error("cannot write NES video capture");}
-    nes_state state=nes_get_state(n); uint8_t bytes[4096];
-    if(len && !nes_inspect(n,(uint16_t)addr,bytes,len)) {nes_destroy(n);return request_error("NES inspection must stay within supported RAM or cartridge ROM");}
+    nes_state state=nes_get_state(n); uint8_t bytes[8][4096],ppu_bytes[4096],oam_bytes[256];
+    for(size_t i=0;i<inspection_count;i++) if(!nes_inspect(n,(uint16_t)inspections[i].address,bytes[i],inspections[i].length)) {nes_destroy(n);return request_error("NES inspection must stay within supported RAM or cartridge ROM");}
+    if(ppu_len && !nes_inspect_ppu(n,(uint16_t)ppu_addr,ppu_bytes,ppu_len)) {nes_destroy(n);return request_error("invalid NES PPU inspection");}
+    if(oam_len && !nes_inspect_oam(n,(uint16_t)oam_addr,oam_bytes,oam_len)) {nes_destroy(n);return request_error("invalid NES OAM inspection");}
     if(frame_path) {
         static const char header[]="P6\n256 240\n255\n";
         const uint8_t *frame=nes_frame(n);
@@ -1511,19 +1525,31 @@ static int run_nes(int argc, wchar_t **argv)
             nes_destroy(n);return request_error("cannot create NES audio capture");
         }
     }
-    printf("{\"status\":\"%s\",\"machine\":\"nes\",\"profile\":\"experimental_nrom_cpu\","
+    printf("{\"status\":\"%s\",\"machine\":\"nes\",\"profile\":\"%s\","
            "\"steps\":%" PRIu64 ",\"cpu_cycles\":%" PRIu64 ",\"ppu_frames\":%" PRIu64
            ",\"audio_captured\":%s,\"audio_samples\":%zu,\"audio_truncated\":%s,\"dmc_used\":%s,\"apu_writes\":%" PRIu64 ",\"oam_dma\":%" PRIu64
            ",\"pc\":%u,\"a\":%u,\"x\":%u,\"y\":%u,\"sp\":%u,\"flags\":%u,\"rom_sha256\":\"",
-           status,state.steps,state.cpu_cycles,state.ppu_frames,audio_path?"true":"false",sample_count,state.audio_truncated?"true":"false",
+           status,cartridge.mapper==2?"experimental_mapper2_cpu":"experimental_nrom_cpu",state.steps,state.cpu_cycles,state.ppu_frames,audio_path?"true":"false",sample_count,state.audio_truncated?"true":"false",
            state.dmc_used?"true":"false",state.apu_writes,state.dma_transfers,(unsigned)state.pc,(unsigned)state.a,(unsigned)state.x,
            (unsigned)state.y,(unsigned)state.sp,(unsigned)state.flags);
     for(size_t i=0;i<32;i++) printf("%02x",(unsigned)digest[i]);
     putchar('"');
+    cartridge=nes_get_cartridge_info(n);
+    printf(",\"cartridge\":{\"mapper\":%u,\"submapper\":%u,\"prg_rom\":%zu,\"chr_rom\":%zu,\"prg_ram\":%zu,\"chr_ram\":%zu,\"selected_bank\":%u,\"battery_flag\":%s,\"header_region\":\"%s\",\"region\":\"%s\",\"region_override\":%s}",
+           cartridge.mapper,cartridge.submapper,cartridge.prg_rom,cartridge.chr_rom,cartridge.prg_ram,cartridge.chr_ram,cartridge.selected_bank,
+           cartridge.battery_flag?"true":"false",cartridge.header_region==1?"pal":cartridge.header_region==2?"multi":"ntsc",cartridge.pal?"pal":"ntsc",region?"true":"false");
     if(state.fault) printf(",\"fault\":{\"operation\":\"%s\",\"address\":%u,\"opcode\":%u}",state.fault,(unsigned)state.fault_address,(unsigned)state.fault_opcode);
     if(event_count) printf(",\"controller_schedule\":{\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu}",event_count,next_event,event_count-next_event);
+    if(controller_set[1] || have_event[1]) {
+        size_t scheduled[2]={0,0},accepted[2]={0,0};
+        for(size_t i=0;i<event_count;i++){++scheduled[events[i].port];if(i<next_event)++accepted[events[i].port];}
+        printf(",\"controllers\":[{\"initial\":%u,\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu},{\"initial\":%u,\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu}]",controller[0],scheduled[0],accepted[0],scheduled[0]-accepted[0],controller[1],scheduled[1],accepted[1],scheduled[1]-accepted[1]);
+    }
     if(video_path) printf(",\"video\":{\"format\":\"y4m\",\"width\":256,\"height\":240,\"fps\":%u,\"frames\":%u,\"frame_limit\":%u,\"truncated\":%s,\"last_cycle\":%" PRIu64 "}",video_fps,video.count,video_limit,video.truncated?"true":"false",video.last_cycle);
-    if(len) {printf(",\"memory\":{\"address\":%u,\"bytes\":\"",addr);for(uint32_t i=0;i<len;i++) printf("%02x",bytes[i]);fputs("\"}",stdout);}
+    if(inspection_count) {printf(",\"memory\":{\"address\":%u,\"bytes\":\"",inspections[0].address);for(uint32_t i=0;i<inspections[0].length;i++) printf("%02x",bytes[0][i]);fputs("\"}",stdout);}
+    if(inspection_count>1) {fputs(",\"memory_regions\":[",stdout);for(size_t j=0;j<inspection_count;j++){if(j)putchar(',');printf("{\"address\":%u,\"bytes\":\"",inspections[j].address);for(uint32_t i=0;i<inspections[j].length;i++)printf("%02x",bytes[j][i]);fputs("\"}",stdout);}putchar(']');}
+    if(ppu_len) {printf(",\"ppu_memory\":{\"address\":%u,\"bytes\":\"",ppu_addr);for(uint32_t i=0;i<ppu_len;i++)printf("%02x",ppu_bytes[i]);fputs("\"}",stdout);}
+    if(oam_len) {printf(",\"oam\":{\"address\":%u,\"bytes\":\"",oam_addr);for(uint32_t i=0;i<oam_len;i++)printf("%02x",oam_bytes[i]);fputs("\"}",stdout);}
     puts("}");nes_destroy(n);return rc;
 }
 
@@ -1606,7 +1632,7 @@ int wmain(int argc, wchar_t **argv)
              "Inspect only: --verify-x64-media DISK [--expect-efi EFI_FILE] (no execution)\n"
              "Map only: --map-x64-media DISK --load-base ADDRESS (no execution)\n"
              "Experimental x64 instruction probe: --probe-x64-software DISK --steps N (no firmware)\n"
-             "Experimental NES: --machine nes --rom NROM.nes --steps N --timeout-ms N [--controller1 MASK] [--controller-event STEP:MASK] [--until-pc ADDRESS] [--inspect ADDRESS:LENGTH] [--frame PATH] [--audio PATH] [--video PATH]\n"
+             "Experimental NES: --machine nes --rom IMAGE.nes --steps N --timeout-ms N [--region auto|ntsc|pal] [--controller1 MASK] [--controller2 MASK] [--controller-event STEP:MASK] [--controller2-event STEP:MASK] [--until-pc ADDRESS] [--inspect ADDRESS:LENGTH] [--inspect-ppu ADDRESS:LENGTH] [--inspect-oam ADDRESS:LENGTH] [--frame PATH] [--audio PATH] [--video PATH]\n"
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"

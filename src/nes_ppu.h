@@ -10,6 +10,7 @@
 class NesPpu {
 public:
     NesPpu() : working(256*240*3), completed(256*240*3) {}
+    void set_pal(bool value) { pal=value; }
     void cartridge(const uint8_t *data, size_t size, bool vertical) {
         chr.fill(0);chr_writable=size==0;vertical_mirroring=vertical;
         if(size) std::copy_n(data,8192,chr.begin());
@@ -68,24 +69,27 @@ public:
     }
     void advance(uint32_t dots) {
         while(dots--) {
-            if(scanline==261 && dot==339 && (frames&1) && (mask&0x18)) {dot=0;scanline=0;++frames;}
-            else {++dot;if(dot>=341){dot=0;if(++scanline>=262){scanline=0;++frames;}}}
+            const unsigned pre=pal?311:261;
+            if(!pal && scanline==pre && dot==339 && (frames&1) && (mask&0x18)) {dot=0;scanline=0;++frames;}
+            else {++dot;if(dot>=341){dot=0;if(++scanline>pre){scanline=0;++frames;}}}
             if(scanline<240 && dot==1) {line_v=vram;select_sprites();}
             if(scanline<240 && dot>=1 && dot<=256) render_pixel(dot-1,scanline);
-            if((mask&0x18) && (scanline<240 || scanline==261)) {
+            if((mask&0x18) && (scanline<240 || scanline==pre)) {
                 if(dot==256 && scanline<240) increment_y();
                 if(dot==257) vram=uint16_t((vram&~0x041f)|(temp&0x041f));
-                if(scanline==261 && dot>=280 && dot<=304) vram=uint16_t((vram&~0x7be0)|(temp&0x7be0));
+                if(scanline==pre && dot>=280 && dot<=304) vram=uint16_t((vram&~0x7be0)|(temp&0x7be0));
             }
             if(scanline==240 && dot==1){completed=working;frame_ready=true;}
             if(scanline==241 && dot==1){status|=0x80;update_nmi();}
-            if(scanline==261 && dot==1){status&=uint8_t(~0xe0);update_nmi();}
+            if(scanline==pre && dot==1){status&=uint8_t(~0xe0);update_nmi();}
         }
     }
     bool take_nmi() {bool pending=nmi_pending;nmi_pending=false;return pending;}
     uint64_t frame_count() const {return frames;}
     const uint8_t *frame() const {return frame_ready?completed.data():nullptr;}
+    uint8_t oam_read(unsigned address) const {return oam[address];}
 private:
+    bool pal=false;
     void increment_y() {
         if((vram&0x7000)!=0x7000) {vram=uint16_t(vram+0x1000);return;}
         vram&=uint16_t(~0x7000);unsigned row=(vram&0x03e0)>>5;

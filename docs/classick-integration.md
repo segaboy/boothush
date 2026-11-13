@@ -6,7 +6,7 @@ BootHush is a Windows command-line test runner. The local checkout contains the 
 
 Normal runs are headless and return one JSON result. When launching from Python with redirected output, use `creationflags=subprocess.CREATE_NO_WINDOW` to keep the console hidden. `--window-mouse` uses an invisible owned window with injected messages. `--live` opens a visible window for an explicitly selected interactive session. Neither requires control of unrelated Windows applications.
 
-Every guest run requires `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
+Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. The separate experimental [NES target](nes.md) uses instruction-bounded `--steps`, two scheduled controllers and stopped CPU/PPU/OAM observations for porting research. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
 
 ## ClasSICK x86-64 status
 

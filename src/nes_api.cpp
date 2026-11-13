@@ -9,17 +9,27 @@ struct bh_nes { nes *core; };
 
 uint32_t bh_nes_api_version(void) { return BH_NES_API_VERSION; }
 bh_nes_result bh_nes_create(const uint8_t *rom, size_t size, int audio, bh_nes **out) {
+    return bh_nes_create_region(rom,size,audio,BH_NES_REGION_AUTO,out);
+}
+bh_nes_result bh_nes_create_region(const uint8_t *rom, size_t size, int audio, bh_nes_region region, bh_nes **out) {
     if (!out) return BH_NES_INVALID_ARGUMENT;
     *out = nullptr;
-    if (!rom || !size || (audio != 0 && audio != 1)) return BH_NES_INVALID_ARGUMENT;
+    if (!rom || !size || (audio != 0 && audio != 1) || region < BH_NES_REGION_AUTO || region > BH_NES_REGION_PAL) return BH_NES_INVALID_ARGUMENT;
     const char *error = nullptr;
-    nes *core = nes_create(rom, size, &error);
+    nes *core = nes_create_region(rom, size, unsigned(region), &error);
     if (!core) return error && !std::strcmp(error, "cannot allocate NES machine or cartridge")
         ? BH_NES_OUT_OF_MEMORY : BH_NES_INVALID_CARTRIDGE;
     if (audio && !nes_capture_audio(core)) { nes_destroy(core); return BH_NES_OUT_OF_MEMORY; }
     bh_nes *machine = new(std::nothrow) bh_nes{core};
     if (!machine) { nes_destroy(core); return BH_NES_OUT_OF_MEMORY; }
     *out = machine;
+    return BH_NES_OK;
+}
+bh_nes_result bh_nes_get_cartridge_info(const bh_nes *m, bh_nes_cartridge_info *out) {
+    if (!m || !out || out->size < sizeof(*out)) return BH_NES_INVALID_ARGUMENT;
+    const nes_cartridge_info c=nes_get_cartridge_info(m->core);
+    *out={sizeof(*out),c.mapper,c.submapper,c.header_region,c.pal?BH_NES_REGION_PAL:BH_NES_REGION_NTSC,c.selected_bank,c.battery_flag,
+          uint32_t(c.prg_rom),uint32_t(c.chr_rom),uint32_t(c.prg_ram),uint32_t(c.chr_ram)};
     return BH_NES_OK;
 }
 void bh_nes_destroy(bh_nes *m) { if (m) { nes_destroy(m->core); delete m; } }
@@ -52,6 +62,14 @@ bh_nes_result bh_nes_read(const bh_nes *m, uint16_t address, uint8_t *out, size_
     std::array<uint8_t,65536> data;
     if (!nes_inspect(m->core, address, data.data(), size)) return BH_NES_UNMAPPED;
     std::memcpy(out, data.data(), size); return BH_NES_OK;
+}
+bh_nes_result bh_nes_read_ppu(const bh_nes *m,uint16_t address,uint8_t *out,size_t size) {
+    if (!m || (!out && size) || address>=0x4000 || size>0x4000u-address) return BH_NES_INVALID_ARGUMENT;
+    return nes_inspect_ppu(m->core,address,out,size)?BH_NES_OK:BH_NES_INVALID_ARGUMENT;
+}
+bh_nes_result bh_nes_read_oam(const bh_nes *m,uint16_t address,uint8_t *out,size_t size) {
+    if (!m || (!out && size) || address>=256 || size>256u-address) return BH_NES_INVALID_ARGUMENT;
+    return nes_inspect_oam(m->core,address,out,size)?BH_NES_OK:BH_NES_INVALID_ARGUMENT;
 }
 bh_nes_result bh_nes_frame(const bh_nes *m, uint8_t *out, size_t capacity) {
     if (!m || !out) return BH_NES_INVALID_ARGUMENT;

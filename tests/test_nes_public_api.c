@@ -18,10 +18,18 @@ int main(void) {
     CHECK(bh_nes_create(rom,3,0,&a)==BH_NES_INVALID_CARTRIDGE && !a);
     CHECK(bh_nes_create(rom,16+16384+8192,1,&a)==BH_NES_OK);
     CHECK(bh_nes_create(rom,16+16384+8192,0,&b)==BH_NES_OK);
+    { bh_nes *p=NULL; bh_nes_cartridge_info info={0}; info.size=sizeof(info);
+      CHECK(bh_nes_create_region(rom,16+16384+8192,0,BH_NES_REGION_PAL,&p)==BH_NES_OK);
+      CHECK(bh_nes_get_cartridge_info(p,&info)==BH_NES_OK && info.mapper==0 && info.region==BH_NES_REGION_PAL && info.header_region==0);
+      bh_nes_destroy(p); }
     memset(rom,0,16+16384+8192); free(rom); /* Both instances own their cartridge. */
     CHECK(bh_nes_frame(a,frame,BH_NES_FRAME_BYTES)==BH_NES_NO_FRAME);
     CHECK(bh_nes_set_controller(a,0,BH_NES_A)==BH_NES_OK);
     CHECK(bh_nes_set_controller(a,2,0)==BH_NES_INVALID_ARGUMENT);
+    CHECK(bh_nes_read_ppu(a,0,&value,1)==BH_NES_OK && value==0);
+    CHECK(bh_nes_read_oam(a,0,&value,1)==BH_NES_OK && value==0);
+    CHECK(bh_nes_read_ppu(a,0x3fff,&value,2)==BH_NES_INVALID_ARGUMENT);
+    CHECK(bh_nes_read_oam(a,255,&value,2)==BH_NES_INVALID_ARGUMENT);
     CHECK(bh_nes_run(a,0,&executed)==BH_NES_INVALID_ARGUMENT && executed==0);
     CHECK(bh_nes_run(a,50000,&executed)==BH_NES_OK && executed==50000);
     state.size=sizeof(state); CHECK(bh_nes_get_state(a,&state)==BH_NES_OK);

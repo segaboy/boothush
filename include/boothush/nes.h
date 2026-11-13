@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define BH_NES_API_VERSION 0x000100u
+#define BH_NES_API_VERSION 0x000101u
 #define BH_NES_WIDTH 256u
 #define BH_NES_HEIGHT 240u
 #define BH_NES_FRAME_BYTES (BH_NES_WIDTH * BH_NES_HEIGHT * 3u)
@@ -41,11 +41,20 @@ typedef struct bh_nes_state {
     uint64_t steps, cpu_cycles, ppu_frames, apu_writes, dma_transfers;
     char fault[32]; /* Empty if no fault; otherwise NUL-terminated. */
 } bh_nes_state;
+typedef enum bh_nes_region { BH_NES_REGION_AUTO=0, BH_NES_REGION_NTSC=1, BH_NES_REGION_PAL=2 } bh_nes_region;
+typedef struct bh_nes_cartridge_info {
+    uint32_t size, mapper, submapper, header_region, region, selected_bank, battery_flag;
+    uint32_t prg_rom_bytes, chr_rom_bytes, prg_ram_bytes, chr_ram_bytes;
+} bh_nes_cartridge_info;
 
 BH_NES_API uint32_t bh_nes_api_version(void);
 /* Copies the cartridge. audio_enabled must be 0 or 1. */
 BH_NES_API bh_nes_result bh_nes_create(const uint8_t *rom, size_t rom_size,
                                        int audio_enabled, bh_nes **out);
+BH_NES_API bh_nes_result bh_nes_create_region(const uint8_t *rom, size_t rom_size,
+                                              int audio_enabled, bh_nes_region region, bh_nes **out);
+/* header_region: 0=NTSC, 1=PAL, 2=multi; region is the selected model. */
+BH_NES_API bh_nes_result bh_nes_get_cartridge_info(const bh_nes *machine, bh_nes_cartridge_info *info);
 BH_NES_API void bh_nes_destroy(bh_nes *machine);
 BH_NES_API bh_nes_result bh_nes_run(bh_nes *machine, uint32_t max_steps, uint32_t *executed);
 BH_NES_API bh_nes_result bh_nes_get_state(const bh_nes *machine, bh_nes_state *state);
@@ -53,6 +62,9 @@ BH_NES_API bh_nes_result bh_nes_get_state(const bh_nes *machine, bh_nes_state *s
 BH_NES_API bh_nes_result bh_nes_set_controller(bh_nes *machine, uint32_t port, uint8_t buttons);
 /* Inspects RAM/mirrors and PRG ROM without side effects. */
 BH_NES_API bh_nes_result bh_nes_read(const bh_nes *machine, uint16_t address, uint8_t *out, size_t size);
+/* Side-effect-free PPU address space ($0000-$3FFF) and 256-byte OAM snapshots. */
+BH_NES_API bh_nes_result bh_nes_read_ppu(const bh_nes *machine, uint16_t address, uint8_t *out, size_t size);
+BH_NES_API bh_nes_result bh_nes_read_oam(const bh_nes *machine, uint16_t address, uint8_t *out, size_t size);
 /* Copies the most recently completed packed RGB frame. */
 BH_NES_API bh_nes_result bh_nes_frame(const bh_nes *machine, uint8_t *out, size_t capacity);
 /* PCM is signed 16-bit, mono, 44,100 Hz. NULL/0 queries pending samples. */

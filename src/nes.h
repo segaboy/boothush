@@ -15,6 +15,10 @@ typedef struct {
     const char *fault;
 } nes_state;
 nes *nes_create(const uint8_t *rom, size_t size, const char **error);
+/* region: 0=header/default, 1=NTSC, 2=PAL */
+nes *nes_create_region(const uint8_t *rom, size_t size, unsigned region, const char **error);
+typedef struct { unsigned mapper, submapper, header_region, pal, selected_bank, battery_flag; size_t prg_rom, chr_rom, prg_ram, chr_ram; } nes_cartridge_info;
+nes_cartridge_info nes_get_cartridge_info(const nes *machine);
 void nes_destroy(nes *machine);
 bool nes_step(nes *machine);
 void nes_set_controller(nes *machine, unsigned port, uint8_t buttons);
@@ -23,6 +27,8 @@ const int16_t *nes_audio(const nes *machine, size_t *sample_count);
 void nes_audio_consume(nes *machine, size_t sample_count);
 nes_state nes_get_state(const nes *machine);
 bool nes_inspect(const nes *machine, uint16_t address, uint8_t *out, size_t size);
+bool nes_inspect_ppu(const nes *machine, uint16_t address, uint8_t *out, size_t size);
+bool nes_inspect_oam(const nes *machine, uint16_t address, uint8_t *out, size_t size);
 /* Last completed 256x240 RGB frame, or NULL if none has completed. */
 const uint8_t *nes_frame(const nes *machine);
 #ifdef __cplusplus

@@ -150,10 +150,16 @@ int main() {
      for(size_t i=1;i<s.size();i++) if(s[i-1]<=0 && s[i]>0)++crossings;
      assert(crossings>=438 && crossings<=442);}
     // Four-step frame IRQ is visible and cleared by the status read.
-    {NesApu a;a.advance(14915);assert(a.irq());assert(a.read_status()&0x40);assert(!a.irq());
+    {NesApu a;a.advance(29828);assert(!a.irq());a.advance(1);assert(a.irq());assert(a.read_status()&0x40);assert(!a.irq());
      a.write(0x4017,0x40);a.advance(20000);assert(!a.irq());}
     {nes m=blank();m.prg[0x3ffe]=0x10;m.prg[0x3fff]=0x80;m.prg[0x10]=0xe8;m.p&=uint8_t(~I);
-     m.apu.advance(14915);assert(m.step() && m.pc==0x8011 && m.x==1 && m.cpu_cycles==9);}
+     m.apu.advance(29829);assert(m.step() && m.pc==0x8011 && m.x==1 && m.cpu_cycles==9);}
+    // Region clocks use CPU cycles: PAL's 16:5 PPU ratio and 312 scanlines.
+    {NesApu a;a.set_pal(true);a.advance(33252);assert(!a.irq());a.advance(1);assert(a.irq());}
+    {NesApu a;a.set_pal(true);assert(a.capture());a.advance(1662607);assert(a.samples().size()==44100);}
+    {nes m=blank();m.pal=true;m.ppu.set_pal(true);m.advance(33247);assert(m.ppu.frame_count()==0);
+     m.advance(1);assert(m.ppu.frame_count()==1);}
+    {NesPpu p;p.set_pal(true);p.write(1,0x18);p.advance(341*312*2);assert(p.frame_count()==2);}
     // DMC fetch, shift order, saturation behavior, and persistent IRQ flag.
     {NesApu a;a.write(0x4017,0x40);a.write(0x4010,0x8f);a.write(0x4011,0x40);
      a.write(0x4012,0);a.write(0x4013,0);a.write(0x4015,0x10);

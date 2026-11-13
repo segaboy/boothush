@@ -6,9 +6,10 @@
 #include <cstdint>
 #include <vector>
 
-// Approximate NTSC APU. DMA is serviced by the machine at instruction boundaries.
+// Approximate APU. DMA is serviced at instruction boundaries.
 class NesApu {
 public:
+    void set_pal(bool value) { pal=value; }
     bool capture() {try {pcm.reserve(44100u*30);} catch(...) {return false;}capture_enabled=true;return true;}
     void write(uint16_t addr,uint8_t value) {
         ++writes;
@@ -56,16 +57,16 @@ public:
     void advance(unsigned n) {
         while(n--) {
             ++clock; ++frame_clock;
-            if(frame_clock==3729 || frame_clock==11186) quarter();
-            else if(frame_clock==7457) {quarter();half();}
-            else if(!five_step && frame_clock==14915) {quarter();half();if(!irq_inhibit)frame_irq=true;frame_clock=0;}
-            else if(five_step && frame_clock==18641) {quarter();half();frame_clock=0;}
+            if(frame_clock==(pal?8313u:7457u) || frame_clock==(pal?24939u:22371u)) quarter();
+            else if(frame_clock==(pal?16627u:14913u)) {quarter();half();}
+            else if(!five_step && frame_clock==(pal?33253u:29829u)) {quarter();half();if(!irq_inhibit)frame_irq=true;frame_clock=0;}
+            else if(five_step && frame_clock==(pal?41561u:37281u)) {quarter();half();frame_clock=0;}
             if(!(clock&1)) for(auto &p:pulse) {if(!p.timer){p.timer=p.period;p.seq=uint8_t((p.seq+1)&7);}else --p.timer;}
             if(!tri_timer){tri_timer=tri_period;if(tri_length&&tri_linear&&tri_period>1)tri_seq=uint8_t((tri_seq+1)&31);}else --tri_timer;
-            if(!noise_timer){noise_timer=uint16_t(noise_periods[noise_mode&15]-1);unsigned tap=(noise_mode&0x80)?6:1;
+            if(!noise_timer){noise_timer=uint16_t((pal?noise_periods_pal:noise_periods)[noise_mode&15]-1);unsigned tap=(noise_mode&0x80)?6:1;
                 unsigned bit=(noise_shift^(noise_shift>>tap))&1;noise_shift=uint16_t((noise_shift>>1)|(bit<<14));}else --noise_timer;
             if(!dmc_timer) {
-                dmc_timer=uint16_t(dmc_periods[dmc_control&15]-1);
+                dmc_timer=uint16_t((pal?dmc_periods_pal:dmc_periods)[dmc_control&15]-1);
                 if(!dmc_silence) {
                     if(dmc_shift&1) {if(dmc_level<=125)dmc_level+=2;}
                     else if(dmc_level>=2)dmc_level-=2;
@@ -73,7 +74,7 @@ public:
                 dmc_shift>>=1;
                 if(!--dmc_bits) {dmc_bits=8;if(dmc_buffer_full){dmc_shift=dmc_buffer;dmc_buffer_full=false;dmc_silence=false;}else dmc_silence=true;}
             } else --dmc_timer;
-            if(capture_enabled) {sample_phase+=44100;if(sample_phase>=1789773){sample_phase-=1789773;sample();}}
+            if(capture_enabled) {sample_phase+=44100;const uint32_t rate=pal?1662607u:1789773u;if(sample_phase>=rate){sample_phase-=rate;sample();}}
         }
     }
     const std::vector<int16_t> &samples() const {return pcm;}
@@ -85,7 +86,9 @@ public:
 private:
     static constexpr uint8_t lengths[32]={10,254,20,2,40,4,80,6,160,8,60,10,14,12,26,14,12,16,24,18,48,20,96,22,192,24,72,26,16,28,32,30};
     static constexpr uint16_t noise_periods[16]={4,8,16,32,64,96,128,160,202,254,380,508,762,1016,2034,4068};
+    static constexpr uint16_t noise_periods_pal[16]={4,8,14,30,60,88,118,148,188,236,354,472,708,944,1890,3778};
     static constexpr uint16_t dmc_periods[16]={428,380,340,320,286,254,226,214,190,160,142,128,106,84,72,54};
+    static constexpr uint16_t dmc_periods_pal[16]={398,354,316,298,276,236,210,198,176,148,132,118,98,78,66,50};
     struct Envelope {bool start=false;uint8_t divider=0,decay=0;};
     struct Pulse {uint16_t period=0,timer=0;uint8_t control=0,sweep=0,length=0,seq=0,sweep_divider=0;bool sweep_reload=false;Envelope env;};
     void restart_dmc() {dmc_address=uint16_t(0xc000+unsigned(dmc_start)*64);dmc_remaining=uint16_t(unsigned(dmc_length)*16+1);}
@@ -133,7 +136,7 @@ private:
     uint64_t clock=0,writes=0;uint32_t frame_clock=0,sample_phase=0;
     uint16_t tri_period=0,tri_timer=0,noise_timer=0,noise_shift=1,dmc_address=0,dmc_remaining=0,dmc_timer=0;
     uint8_t enabled=0,tri_control=0,tri_length=0,tri_linear=0,tri_seq=0,noise_control=0,noise_mode=0,noise_length=0,dmc_level=0;
-    bool tri_reload=false,five_step=false,irq_inhibit=false,frame_irq=false,capture_enabled=false,was_truncated=false;
+    bool pal=false,tri_reload=false,five_step=false,irq_inhibit=false,frame_irq=false,capture_enabled=false,was_truncated=false;
     uint8_t dmc_control=0,dmc_start=0,dmc_length=0,dmc_shift=0,dmc_bits=8,dmc_buffer=0;
     bool dmc_irq=false,dmc_buffer_full=false,dmc_silence=true,dmc_used=false;
     double last_input=0,last_output=0;

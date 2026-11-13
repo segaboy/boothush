@@ -20,7 +20,11 @@ constexpr uint8_t cycles[256]={
 }
 struct nes {
     std::vector<uint8_t> prg;
+    std::vector<uint8_t> prg_ram;
     std::array<uint8_t,2048> ram{};
+    unsigned mapper=0, submapper=0, header_region=0, bank=0, ppu_fraction=0;
+    size_t chr_rom_size=0, chr_ram_size=0;
+    bool pal=false, battery=false;
     NesPpu ppu;
     NesApu apu;
     uint16_t pc=0, fault_address=0, instruction_pc=0;
@@ -33,7 +37,11 @@ struct nes {
     const char *fault=nullptr;
     bool peek(uint16_t addr, uint8_t &v) const {
         if (addr<0x2000) { v=ram[addr&0x7ff]; return true; }
-        if (addr>=0x8000) { v=prg[(addr-0x8000)%prg.size()]; return true; }
+        if (addr>=0x6000 && addr<0x8000 && !prg_ram.empty()) {v=prg_ram[addr-0x6000];return true;}
+        if (addr>=0x8000) {
+            size_t offset=mapper==2 ? (addr<0xc000 ? size_t(bank)*16384+(addr-0x8000) : prg.size()-16384+(addr-0xc000)) : (addr-0x8000)%prg.size();
+            v=prg[offset]; return true;
+        }
         return false;
     }
     uint8_t read(uint16_t addr) {
@@ -71,7 +79,14 @@ struct nes {
             controller_strobe=strobe;
         }
         else if((addr>=0x4000 && addr<=0x4013) || addr==0x4015 || addr==0x4017) apu.write(addr,v);
+        else if(addr>=0x6000 && addr<0x8000 && !prg_ram.empty()) prg_ram[addr-0x6000]=v;
+        else if(addr>=0x8000 && mapper==2) bank=unsigned(v)&unsigned(prg.size()/16384-1);
         else if(!fault) {fault="unsupported_bus_write";fault_address=addr;}
+    }
+    void advance(unsigned elapsed) {
+        cpu_cycles+=elapsed;
+        unsigned dots=elapsed*(pal?16u:15u)+ppu_fraction;
+        ppu_fraction=dots%5;ppu.advance(dots/5);apu.advance(elapsed);
     }
     uint8_t byte() {uint8_t v=read(pc); pc=uint16_t(pc+1); return v;}
     uint16_t word() {uint8_t lo=byte(); uint8_t hi=byte(); return uint16_t(lo | uint16_t(hi)<<8);}
@@ -135,14 +150,14 @@ struct nes {
         if(apu.dmc_dma_needed()) {
             uint16_t address=apu.dmc_dma_address();uint8_t value=0;
             if(!peek(address,value)){fault="unsupported_dmc_dma_source";fault_address=address;return false;}
-            apu.dmc_dma_supply(value);cpu_cycles+=4;ppu.advance(12);apu.advance(4);
+            apu.dmc_dma_supply(value);advance(4);
         }
         bool nmi=ppu.take_nmi();
         if(nmi || (apu.irq() && !(p&I))) {
             push(uint8_t(pc>>8));push(uint8_t(pc));push(uint8_t((p&~0x10)|0x20));p|=I;
             uint16_t vector=nmi?0xfffa:0xfffe;
             uint8_t lo=read(vector),hi=read(uint16_t(vector+1));pc=uint16_t(lo|uint16_t(hi)<<8);
-            cpu_cycles+=7;ppu.advance(21);apu.advance(7);
+            advance(7);
             if(fault) return false;
         }
         extra_cycles=0;
@@ -200,32 +215,46 @@ struct nes {
         if(fault) {pc=instruction_pc;a=old_a;x=old_x;y=old_y;p=old_p;sp=old_sp;return false;}
         ++steps;unsigned elapsed=cycles[opcode]+extra_cycles;
         if(dma_pending) {elapsed+=513+unsigned((cpu_cycles+elapsed)&1);dma_pending=false;}
-        cpu_cycles+=elapsed;ppu.advance(3*elapsed);apu.advance(elapsed);return true;
+        advance(elapsed);return true;
     }
 };
 
-nes *nes_create(const uint8_t *rom,size_t size,const char **error) {
+nes *nes_create(const uint8_t *rom,size_t size,const char **error) {return nes_create_region(rom,size,0,error);}
+nes *nes_create_region(const uint8_t *rom,size_t size,unsigned region,const char **error) {
     if(!error) return nullptr;
-    *error="unsupported or invalid iNES/NES 2.0 NROM cartridge";
-    if(!rom || size<16 || std::memcmp(rom,"NES\x1a",4) || (rom[4]!=1 && rom[4]!=2) ||
-       rom[5]>1 || (rom[6]&0xfe)) return nullptr;
-    if(rom[7]==0) {
-        for(unsigned i=8;i<16;i++) if(rom[i]) return nullptr;
-    } else if(rom[7]==0x08) {
-        // Mapper 0/submapper 0, standard linear sizes, no declared cartridge RAM
-        // or extra hardware. Timing is not modeled; accept NTSC or multi-region
-        // metadata only, and an unspecified or standard-controller device.
-        if(rom[8] || rom[9] || rom[10] || rom[11] || !rom[5] || (rom[12]!=0 && rom[12]!=2) ||
-           rom[13] || rom[14] || (rom[15]!=0 && rom[15]!=1)) return nullptr;
-    } else return nullptr;
+    *error="unsupported or invalid iNES/NES 2.0 cartridge";
+    if(!rom || size<16 || std::memcmp(rom,"NES\x1a",4) || region>2 || (rom[6]&0x0c)) return nullptr;
+    const bool nes2=(rom[7]&0x0c)==0x08;
+    if(!nes2 && (rom[6]&0x02)) return nullptr; // iNES battery RAM has ambiguous sizing/persistence.
+    if((rom[7]&0x0f)!=(nes2?0x08:0)) return nullptr;
+    unsigned mapper=(rom[6]>>4)|(rom[7]&0xf0), submapper=0, timing=0;
+    size_t work_ram=0, chr_ram=0;
+    if(nes2) {
+        mapper|=unsigned(rom[8]&15)<<8;submapper=rom[8]>>4;
+        if(rom[9] || (rom[10]&0xf0) || (rom[11]&0xf0) || rom[12]>2 || rom[13] || rom[14] || rom[15]>1) return nullptr;
+        if((rom[10]&15)!=0 && (rom[10]&15)!=7) return nullptr;
+        if((rom[11]&15)!=0 && (rom[11]&15)!=7) return nullptr;
+        work_ram=(rom[10]&15)?8192:0;chr_ram=(rom[11]&15)?8192:0;timing=rom[12];
+        if((rom[5] && chr_ram) || (!rom[5] && !chr_ram)) return nullptr;
+    } else {
+        if(rom[8] || rom[9]>1) return nullptr;
+        for(unsigned i=10;i<16;i++) if(rom[i]) return nullptr;
+        timing=rom[9];chr_ram=rom[5]?0:8192;
+    }
+    if(rom[5]>1 || (mapper==0 && (submapper!=0 || (rom[4]!=1 && rom[4]!=2))) ||
+       (mapper==2 && (!nes2 || submapper!=1 || rom[4]<2 || rom[4]>32 || (rom[4]&(rom[4]-1)))) ||
+       (mapper!=0 && mapper!=2)) return nullptr;
     const size_t prg_size=size_t(rom[4])*16384, chr_size=size_t(rom[5])*8192;
     if(size!=16+prg_size+chr_size) return nullptr;
     nes *m=nullptr;
-    try {m=new nes;m->prg.assign(rom+16,rom+16+prg_size);} catch(...) {delete m;*error="cannot allocate NES machine or cartridge";return nullptr;}
+    try {m=new nes;m->prg.assign(rom+16,rom+16+prg_size);m->prg_ram.resize(work_ram);} catch(...) {delete m;*error="cannot allocate NES machine or cartridge";return nullptr;}
+    m->mapper=mapper;m->submapper=submapper;m->header_region=timing;m->pal=region==2 || (region==0 && timing==1);m->battery=(rom[6]&2)!=0;
+    m->chr_rom_size=chr_size;m->chr_ram_size=chr_ram;m->ppu.set_pal(m->pal);m->apu.set_pal(m->pal);
     m->ppu.cartridge(rom+16+prg_size,chr_size,(rom[6]&1)!=0);
     uint8_t lo=0,hi=0; m->peek(0xfffc,lo);m->peek(0xfffd,hi); m->pc=uint16_t(lo|uint16_t(hi)<<8);
     *error=nullptr;return m;
 }
+nes_cartridge_info nes_get_cartridge_info(const nes *m) {return {m->mapper,m->submapper,m->header_region,m->pal?1u:0u,m->bank,m->battery?1u:0u,m->prg.size(),m->chr_rom_size,m->prg_ram.size(),m->chr_ram_size};}
 void nes_destroy(nes *m) {delete m;}
 bool nes_step(nes *m) {return m->step();}
 void nes_set_controller(nes *m,unsigned port,uint8_t buttons) {if(port<2) m->controller_live[port]=buttons;}
@@ -236,6 +265,16 @@ nes_state nes_get_state(const nes *m) {return {m->pc,m->fault_address,m->a,m->x,
 bool nes_inspect(const nes *m,uint16_t address,uint8_t *out,size_t size) {
     if(size>0x10000u-address || (!out&&size)) return false;
     for(size_t i=0;i<size;i++) if(!m->peek(uint16_t(address+i),out[i])) return false;
+    return true;
+}
+bool nes_inspect_ppu(const nes *m,uint16_t address,uint8_t *out,size_t size) {
+    if(address>=0x4000 || size>0x4000u-address || (!out&&size)) return false;
+    for(size_t i=0;i<size;i++) out[i]=m->ppu.memory_read(uint16_t(address+i));
+    return true;
+}
+bool nes_inspect_oam(const nes *m,uint16_t address,uint8_t *out,size_t size) {
+    if(address>=256 || size>256u-address || (!out&&size)) return false;
+    for(size_t i=0;i<size;i++) out[i]=m->ppu.oam_read(unsigned(address+i));
     return true;
 }
 const uint8_t *nes_frame(const nes *m) {return m->ppu.frame();}

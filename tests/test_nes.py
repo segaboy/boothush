@@ -61,7 +61,7 @@ class NesTarget(unittest.TestCase):
         image[6], image[7], image[12], image[15] = 1, 8, 2, 1
         code, result = self.run_nes(image, '--until-pc', '0x8004', '--inspect', '0:1')
         self.assertEqual((code, result['status'], result['memory']['bytes']), (0, 'condition_met', '2a'))
-        for index, value in ((8, 0x10), (9, 1), (10, 1), (11, 1), (12, 1), (13, 1), (14, 1), (15, 2)):
+        for index, value in ((8, 0x10), (9, 1), (10, 1), (11, 1), (12, 3), (13, 1), (14, 1), (15, 2)):
             invalid = bytearray(image); invalid[index] = value
             code, result = self.run_nes(invalid)
             self.assertEqual((code, result['status']), (2, 'error'))
@@ -92,6 +92,93 @@ class NesTarget(unittest.TestCase):
                                     '--controller-event', '3:1', '--controller-event', '4:0')
         self.assertEqual((code, result['status'], result['memory']['bytes']), (0, 'condition_met', '4140'))
         self.assertEqual(result['controller_schedule'], {'scheduled': 2, 'accepted': 2, 'pending': 0})
+
+    def test_mapper2_banking_ram_and_validation(self):
+        # A generated 512 KiB NES 2.0 board; reset in the fixed last bank.
+        image = bytearray(b'NES\x1a' + bytes(12))
+        image[4], image[6], image[7], image[8], image[10], image[11], image[12] = 32, 0x22, 8, 0x10, 7, 7, 1
+        for bank in range(32):
+            image.extend(bytes([bank]) * 16384)
+        program = bytes.fromhex('a905 8d0080 ad0080 8500 a9a6 8d0060 ad0060 8501 ea')
+        image[16+31*16384:16+31*16384+len(program)] = program
+        image[-4:-2] = bytes.fromhex('00c0')
+        code, result = self.run_nes(image, '--until-pc', hex(0xc000+len(program)-1), '--inspect', '0:2')
+        self.assertEqual((code, result['memory']['bytes']), (0, '05a6'))
+        self.assertEqual((result['cartridge']['mapper'], result['cartridge']['submapper'], result['cartridge']['selected_bank']), (2, 1, 5))
+        self.assertEqual((result['cartridge']['prg_rom'], result['cartridge']['prg_ram'], result['cartridge']['chr_ram']), (524288, 8192, 8192))
+        self.assertEqual((result['cartridge']['header_region'], result['cartridge']['region']), ('pal', 'pal'))
+        # Upstream tilt.asm's UNROM header sets the battery flag but declares
+        # no PRG NVRAM or RAM; the flag alone must not create fictitious RAM.
+        upstream_header = bytearray(image); upstream_header[10] = 0
+        code, exact = self.run_nes(upstream_header, '--until-pc', '0xc008', '--inspect', '0x8000:1')
+        self.assertEqual((code, exact['memory']['bytes'], exact['cartridge']['prg_ram'], exact['cartridge']['battery_flag']), (0, '05', 0, True))
+        code, result = self.run_nes(image, '--until-pc', hex(0xc000+len(program)-1), '--inspect', '0x8000:1', '--region', 'ntsc')
+        self.assertEqual((code, result['memory']['bytes'], result['cartridge']['region'], result['cartridge']['region_override']), (0, '05', 'ntsc', True))
+        for index, value in ((8, 0), (8, 0x20), (9, 1), (10, 0x70), (11, 0), (12, 3)):
+            invalid = bytearray(image); invalid[index] = value
+            code, result = self.run_nes(invalid)
+            self.assertEqual((code, result['status']), (2, 'error'), (index, value))
+
+    def test_two_independent_scheduled_controllers(self):
+        program = bytes.fromhex('a901 8d1640 a900 8d1640 ad1640 8500 ad1740 8501 ad1640 8502 ad1740 8503')
+        image = cartridge(program + b'\xea')
+        args = ('--until-pc', hex(0x8000+len(program)), '--inspect', '0:4', '--controller1', '1', '--controller2', '2',
+                '--controller2-event', '3:1', '--controller2-event', '4:0',
+                '--controller-event', '3:2', '--controller-event', '4:0')
+        code, result = self.run_nes(image, *args)
+        self.assertEqual((code, result['memory']['bytes']), (0, '40414140'))
+        self.assertEqual(result['controller_schedule'], {'scheduled': 4, 'accepted': 4, 'pending': 0})
+        self.assertEqual([c['accepted'] for c in result['controllers']], [2, 2])
+        self.assertEqual(self.run_nes(image, *args), (code, result))
+
+    def test_concurrent_cpu_ppu_and_oam_inspection(self):
+        program = bytes.fromhex('a900 8d0620 8d0620 a97b 8d0720 a900 8d0320 a956 8d0420 a9aa 8500')
+        image = cartridge(program + b'\xea')
+        args = ('--until-pc', hex(0x8000+len(program)), '--inspect', '0:1', '--inspect', '0x800:1',
+                '--inspect-ppu', '0:1', '--inspect-oam', '0:1')
+        code, result = self.run_nes(image, *args)
+        self.assertEqual(code, 0)
+        self.assertEqual([x['bytes'] for x in result['memory_regions']], ['aa', 'aa'])
+        self.assertEqual((result['ppu_memory']['bytes'], result['oam']['bytes']), ('7b', '56'))
+        self.assertEqual(self.run_nes(image, *args), (code, result))
+        for option, bad in (('--inspect-ppu', '0x3fff:2'), ('--inspect-oam', '255:2')):
+            self.assertEqual(self.run_nes(image, option, bad)[0], 2)
+
+    @unittest.skipUnless(os.environ.get('BOOTHUSH_STB_UNROM'), 'Super Tilt Bro UNROM fixture not supplied')
+    def test_author_super_tilt_bro_unrom_replay(self):
+        source = Path(os.environ['BOOTHUSH_STB_UNROM'])
+        digest = '5d045246f12d424c2c67ecda883c66d8d346f7b5396ed819ddb326f44dcb5aaa'
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
+        common = ['--controller-event', '1000000:1', '--controller-event', '1030000:0',
+                  '--controller-event', '1800000:1', '--controller-event', '1830000:0',
+                  '--controller-event', '4000000:8', '--controller-event', '4050000:0',
+                  '--controller-event', '6500000:1', '--controller-event', '6550000:0',
+                  '--controller-event', '7500000:8', '--controller-event', '7550000:0',
+                  '--controller2-event', '6500000:1', '--controller2-event', '6550000:0',
+                  '--inspect', '0:2048', '--inspect-ppu', '0x2000:2048', '--inspect-oam', '0:256']
+        movement = ['--controller-event', '10000000:128', '--controller-event', '11500000:0',
+                    '--controller2-event', '10000000:64', '--controller2-event', '11500000:0']
+        def run(name, extra):
+            frame = self.file.parent / (name + '.ppm')
+            command = [os.environ['BOOTHUSH_EXE'], '--machine', 'nes', '--rom', str(source),
+                       '--steps', '13000000', '--timeout-ms', '30000', *common, *extra, '--frame', str(frame)]
+            proc = subprocess.run(command, capture_output=True, text=True, timeout=35,
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            result = json.loads(proc.stdout)
+            self.assertEqual((result['status'], result['rom_sha256'], result['cartridge']['region']), ('step_limit', digest, 'pal'))
+            self.assertEqual(result['controller_schedule']['pending'], 0)
+            return result, frame.read_bytes()
+        baseline, baseline_frame = run('baseline', [])
+        first, first_frame = run('movement1', movement)
+        second, second_frame = run('movement2', movement)
+        self.assertEqual((first, first_frame), (second, second_frame))
+        self.assertEqual(first['controller_schedule']['accepted'], 16)
+        self.assertNotEqual(baseline_frame, first_frame)
+        self.assertNotEqual(baseline['memory'], first['memory'])
+        self.assertNotEqual(baseline['ppu_memory'], first['ppu_memory'])
+        self.assertNotEqual(baseline['oam'], first['oam'])
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
 
     def test_frame_requires_completed_frame_and_no_overwrite(self):
         image = cartridge(bytes.fromhex('4c0080'))
