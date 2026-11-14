@@ -25,3 +25,5 @@ python -B scripts/capture_pc286_drag_probe.py --boothush out/windows/boothush.ex
 The four runs are repeatable modeled device input, not a live single-session GUI, E3/E4 evidence, a human test, a source-to-target parity proof or a release pass. The test exercises no OS installation, window manager, content click, title hit, keyboard rollover, serial mouse or physical hardware. Adoption of any finding into ClasSICK remains subject to its independent source-eligibility and role controls.
 
 After this recording the test file was extended with a separate bitmap comparison; the hash above identifies the exact earlier source snapshot used for these four captures.
+
+The moved PPM was also losslessly converted using BootHush's bundled converter to `out/mac-286-keyboard-drag-20261114/moved.png`, SHA-256 `4f2557d6099d0301822714b8697e3699019dc809a544c59a7fd324577f135f90`. It is original diagnostic artwork and not a ClasSICK window screenshot.
