@@ -108,6 +108,13 @@ $witness = Join-Path $env:TEMP ('pc286-' + [guid]::NewGuid().ToString('N') + '.t
 
 The retained diagnostic produced the same stopped state with and without the witness. Its checked witness held 10,200 events with zero dropped.
 
+ClasSICK's subsequent original 286 diagnostic can also generate a disposable
+whole hard-disk image for this model and run its shared window session from
+it. Its host and Mac comparisons, disk identity, boundary controls and
+source/specification records are in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+It is not an installer or evidence of physical disk geometry or BIOS behavior.
+
 ## Display and remaining limits
 
 Both existing machines can record a bounded headless Y4M video, then use the bundled FFmpeg to make GIF, MP4 or PNG without relying on a system installation. See the [capture guide](headless-capture.md) for complete commands, bundle setup, timing and limits. The x64 profile is not implemented and cannot yet produce frames.
