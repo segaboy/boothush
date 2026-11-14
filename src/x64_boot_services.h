@@ -10,8 +10,8 @@
 class X64BootServices {
 public:
     enum class Status { ok, invalid, buffer_too_small, out_of_resources, stale_key, exited };
-    enum class Type : std::uint32_t { loader_data = 2, conventional = 7 };
-    struct Region { std::uint64_t address, pages; Type type; };
+    enum class Type : std::uint32_t { loader_code = 1, loader_data = 2, conventional = 7 };
+    struct Region { std::uint64_t address, pages; Type type; bool owned_allocation = false; };
     static constexpr std::uint64_t page_size = 4096;
 
     X64BootServices(std::uint64_t address, std::uint64_t pages);
@@ -19,6 +19,8 @@ public:
     bool exited() const { return exited_; }
     Status memory_map(std::span<Region> output, std::size_t &required, std::uint64_t &key) const;
     Status allocate_max(std::uint64_t max_address, std::uint64_t pages, std::uint64_t &address);
+    // Describe an already occupied image range. This is not a page allocation and cannot be freed.
+    Status reserve_image(std::uint64_t address, std::uint64_t pages, Type type);
     // This narrow model accepts exact allocations, not partial frees.
     Status free_pages(std::uint64_t address, std::uint64_t pages);
     Status exit_boot_services(std::uint64_t key);

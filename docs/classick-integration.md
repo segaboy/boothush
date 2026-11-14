@@ -18,6 +18,8 @@ An independently tested, opt-in [PS/2 auxiliary controller model](ps2-auxiliary.
 
 An independent x64 page-allocation and memory-map-key state model has synthetic stale-key and exit tests. It is not yet callable by an EFI guest; see the [x64 notes](classick-x64.md).
 
+A separate host-callable x64 experiment serializes that model into bounded byte-buffer descriptors and exercises EFI-style allocation, map, and exit responses. It remains disconnected from a CPU and does not constitute a complete firmware memory map or a guest boot. [Scope and evidence](x64-efi-memory-evidence-20261114.md).
+
 ## Correlate the Mac mouse timing
 
 The opt-in `--mouse-witness-detail 1` extends the existing bounded witness with scheduled and accepted input, pending transitions, guard deadlines, CPU interrupt acceptance and instruction context. Add `--mouse-witness-memory ADDRESS:LENGTH` to include filtered guest RAM writes in the same ordered stream. It retains the existing witness by default and works headlessly with record/replay. See the [correlated mouse witness guide](mac-mouse-witness.md) for exact 2,048- and 4,096-cycle commands, field definitions and limits. A transition while an SCC interrupt is pending is an observation in this model, not a diagnosis or physical-hardware timing result.

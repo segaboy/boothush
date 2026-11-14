@@ -45,7 +45,7 @@ target_include_directories(boothush_x64_media PUBLIC src)
 target_compile_features(boothush_x64_media PUBLIC cxx_std_20)
 target_link_libraries(boothush_x64_media PUBLIC bcrypt)
 
-add_library(boothush_x64_firmware_model STATIC src/x64_boot_services.cpp)
+add_library(boothush_x64_firmware_model STATIC src/x64_boot_services.cpp src/x64_efi_memory.cpp)
 target_include_directories(boothush_x64_firmware_model PUBLIC src)
 target_compile_features(boothush_x64_firmware_model PUBLIC cxx_std_20)
 
@@ -120,6 +120,14 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME x64_boot_services COMMAND boothush_x64_boot_services_test)
     set_tests_properties(x64_boot_services PROPERTIES TIMEOUT 20)
+
+    add_executable(boothush_x64_efi_memory_test tests/test_x64_efi_memory.cpp)
+    target_link_libraries(boothush_x64_efi_memory_test PRIVATE boothush_x64_firmware_model boothush_x64_media)
+    if(MINGW)
+        target_link_options(boothush_x64_efi_memory_test PRIVATE -static)
+    endif()
+    add_test(NAME x64_efi_memory COMMAND boothush_x64_efi_memory_test)
+    set_tests_properties(x64_efi_memory PROPERTIES TIMEOUT 20)
 
     add_executable(boothush_x64_pe_loader_test tests/test_x64_pe_loader.cpp)
     target_link_libraries(boothush_x64_pe_loader_test PRIVATE boothush_x64_media)

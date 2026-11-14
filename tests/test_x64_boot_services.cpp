@@ -61,5 +61,21 @@ int main()
     require(model.allocate_max(UINT64_MAX, 1, address) == Status::exited, "allocation allowed after exit");
     require(model.free_pages(0x100000, 1) == Status::exited, "free allowed after exit");
     require(model.exit_boot_services(key) == Status::exited, "second exit allowed");
+    Model images(0x100000,256);
+    require(images.reserve_image(0x104000,3,Model::Type::loader_code)==Status::ok,"image code reservation failed");
+    require(images.reserve_image(0x107000,2,Model::Type::loader_data)==Status::ok,"image data reservation failed");
+    require(images.memory_map(map,required,key)==Status::ok && required==4 &&
+            map[1].address==0x104000 && map[1].pages==3 && map[1].type==Model::Type::loader_code &&
+            map[2].address==0x107000 && map[2].pages==2 && map[2].type==Model::Type::loader_data,
+            "image map ranges incorrect");
+    const auto image_key=key;
+    require(images.free_pages(0x107000,2)==Status::invalid,"image data was freed as an allocation");
+    require(images.reserve_image(0x106000,2,Model::Type::loader_code)==Status::out_of_resources,
+            "overlapping image range accepted");
+    require(images.reserve_image(UINT64_MAX-4095,2,Model::Type::loader_code)==Status::out_of_resources,
+            "overflowing reservation accepted");
+    require(images.memory_map(map,required,key)==Status::ok && key==image_key,"failed image operation changed key");
+    require(images.allocate_max(0x108fff,2,address)==Status::ok && address==0x102000,
+            "allocation overlapped image reservation");
     return 0;
 }
