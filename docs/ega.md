@@ -1,5 +1,7 @@
 # IBM EGA diagnostics
 
+The original [286 paired-target diagnostic](pc286-pair-probe-20261114.md) checks all pixels of an unscaled 512x342 canvas at (64,4), including cursor restoration after keyboard-driven motion. It exercises this model and its built-in firmware, not historical adapter fidelity or a ClasSICK release.
+
 BootHush models a single IBM EGA adapter with 256 KiB of planar video RAM and an enhanced color monitor. The graphics profile starts at 640×350 with 16 logical colors selected from the 64-color EGA palette. This lets a diagnostic ROM draw pixels immediately. A firmware shim can also select mode `10h` or mode `03h` with optional preservation of video RAM.
 
 - The sequencer controls plane writes and odd/even CPU addressing. The graphics controller handles memory aperture selection, read-map selection, color comparison, EGA write modes 0–2, read latches, set/reset, rotation, raster operations, and bit masking.

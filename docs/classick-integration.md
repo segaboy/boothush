@@ -8,7 +8,11 @@ Normal runs are headless and return one JSON result. When launching from Python 
 
 Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. The separate experimental [NES target](nes.md) uses instruction-bounded `--steps`, two scheduled controllers and stopped CPU/PPU/OAM observations for porting research. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
 
-## ClasSICK x86-64 status
+## Current Mac/286 direction
+
+The owner's 2026-11-14 direction makes native Mac128K and PC/AT 286 the next paired-release targets; x64 work is paused. The [original EGA/keyboard diagnostic](pc286-pair-probe-20261114.md) checks a centered 512x342 canvas and two directional cursor moves with scheduled keys. It does not run ClasSICK or establish a window, parity, human input or physical-hardware behavior. See the [PC/AT profile](pc-at.md) for exact firmware and keyboard limitations.
+
+## Preserved x86-64 status
 
 BootHush does not yet boot the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. The experimental software probe can interpret a limited number of actual EFI instructions without a hypervisor, but does not provide a UEFI context or boot. See [x64 enablement](classick-x64.md) for commands, results, and remaining work.
 
