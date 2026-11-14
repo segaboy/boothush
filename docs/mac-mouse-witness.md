@@ -2,6 +2,14 @@
 
 `--mouse-witness-detail 1`, together with `--mouse-witness PATH`, opts into the `BHMACMOUSE2` format. Without this option the original `BHMACMOUSE1` format is unchanged. The witness is disabled by default. It is an observation of BootHush's model, not a physical timing measurement or guest-owned omission counter. It does not write to guest memory or control the Windows mouse or keyboard. The native invisible-window fixture sends window messages; it is not physical input.
 
+The Not Super Tilt Bro project used this witness to count phase events between
+successive SCC-A reads in its title ROM. At 256 modeled cycles per edge, each
+of 20 observed read intervals crossed two to four phase transitions; at 1,024
+cycles, each of 85 crossed at most one. Traced and untraced runs matched their
+corresponding guest state and frames. The exact ROM, executable, commands and
+limits are in `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`.
+These model observations do not establish physical timing or isolate one cause.
+
 ## Reproduce the ClasSICK timing comparison
 
 These commands use the original 65,536-byte candidate ROM with SHA-256 `faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c`. `--mouse-witness` and `--frame` require new paths. Each invocation is a cold boot, executes without `--live`, and schedules a rightward movement. A caller launching a child with redirected output can specify `CREATE_NO_WINDOW` to hide its console, as in the integration guide.
