@@ -13,8 +13,10 @@ class MacPortTitleIntegration(unittest.TestCase):
     def test_mouse_start_keyboard_play_and_repeatable_capture(self):
         rom=Path(os.environ['BOOTHUSH_STB_TITLE_ROM']).resolve(strict=True)
         exe=Path(os.environ['BOOTHUSH_EXE']).resolve(strict=True)
-        digest='d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e'
-        self.assertEqual(hashlib.sha256(rom.read_bytes()).hexdigest(),digest)
+        admitted=('d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e',
+                  '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e')
+        digest=hashlib.sha256(rom.read_bytes()).hexdigest()
+        self.assertIn(digest,admitted)
         exe_hash=hashlib.sha256(exe.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory(dir=os.environ.get('BOOTHUSH_TEST_TMP')) as temp:
             root=Path(temp)

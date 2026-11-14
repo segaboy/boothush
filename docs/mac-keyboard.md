@@ -29,8 +29,10 @@ The model queues transitions, including overlapping holds and releases, but does
 ## Optional port title integration
 
 `tests/test_mac_port_title_integration.py` adds a separate, optional black-box
-test of the port's mouse-title-to-keyboard-play ROM SHA-256
-`d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e`.
+test of two exact port mouse-title-to-keyboard-play ROM identities: the earlier
+`d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e`
+and its title-control-label successor
+`1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e`.
 The ROM is generated and retained by the port, not distributed in this
 repository. Set `BOOTHUSH_STB_TITLE_ROM` to that exact image and `BOOTHUSH_EXE`
 to the executable; otherwise the test skips if the fixture is not supplied.
