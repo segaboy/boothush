@@ -44,6 +44,13 @@ struct Cpu {
         if (v>>63) flags|=SF;
         if (((a^b)&(a^v))>>63) flags|=OF;
     }
+    void test_flags(uint64_t value) {
+        flags&=~(CF|PF|ZF|SF|OF); // AF is architecturally undefined; preserve it.
+        uint8_t x=uint8_t(value);x^=x>>4;x^=x>>2;x^=x>>1;
+        if(!(x&1)) flags|=PF;
+        if(!value) flags|=ZF;
+        if(value>>63) flags|=SF;
+    }
     bool step() {
         const uint8_t *p; if (!fetch(rip,1,p)) return false;
         opcode=p[0]; uint64_t next=rip;
@@ -56,9 +63,20 @@ struct Cpu {
             if(!fetch(rip,5,p)) return false;
             const int32_t disp=int32_t(uint32_t(le(p+1,4))); uint64_t ret=rip+5, sp=r[4]-8;
             if(!write64(sp,ret)) return false; r[4]=sp; next=ret+uint64_t(int64_t(disp));
+        } else if(opcode==0x0f) {
+            if(!fetch(rip,6,p)) return false;
+            if(p[1]!=0x84 && p[1]!=0x85) {stop="unsupported_instruction";return false;}
+            bool equal=(flags&ZF)!=0, take=p[1]==0x84?equal:!equal;
+            int32_t disp=int32_t(uint32_t(le(p+2,4)));next=rip+6;
+            if(take) next+=uint64_t(int64_t(disp));
         } else if (opcode==0x48) {
             if(!fetch(rip,3,p)) return false;
-            if (p[1]==0x83 && p[2]==0xec) {
+            if(p[1]==0x85 && (p[2]&0xc0)==0xc0) {
+                unsigned source=(p[2]>>3)&7,destination=p[2]&7;
+                test_flags(r[source]&r[destination]);next+=3;
+            } else if(p[1]==0x8d && p[2]==0x45) {
+                if(!fetch(rip,4,p)) return false;r[0]=r[5]+uint64_t(int64_t(int8_t(p[3])));next+=4;
+            } else if (p[1]==0x83 && p[2]==0xec) {
                 if(!fetch(rip,4,p)) return false; uint64_t b=uint64_t(int64_t(int8_t(p[3]))), a=r[4], v=a-b;
                 sub_flags(a,b,v); r[4]=v; next+=4;
             } else if(p[1]==0x81 && p[2]==0xec) {
@@ -74,6 +92,22 @@ struct Cpu {
                 if(!fetch(rip,9,p)) return false; if(p[3]!=0x24){stop="unsupported_instruction";return false;}
                 uint64_t a=r[4]+uint64_t(int64_t(int8_t(p[4]))), v=uint64_t(int64_t(int32_t(uint32_t(le(p+5,4)))));
                 if(!write64(a,v)) return false; next+=9;
+            } else {stop="unsupported_instruction";return false;}
+        } else if(opcode==0x4d) {
+            // REX.WRB TEST r8..r15,r8..r15; register-direct only.
+            if(!fetch(rip,3,p)) return false;
+            if(p[1]!=0x85 || (p[2]&0xc0)!=0xc0) {stop="unsupported_instruction";return false;}
+            unsigned source=8+((p[2]>>3)&7), destination=8+(p[2]&7);
+            test_flags(r[source]&r[destination]);next+=3;
+        } else if(opcode==0x49) {
+            if(!fetch(rip,3,p)) return false;
+            if(p[1]==0x89 && p[2]==0x00) {
+                if(!write64(r[8],r[0])) return false;next+=3;
+            } else if(p[1]==0xc7 && p[2]==0x40) {
+                if(!fetch(rip,8,p)) return false;
+                uint64_t address=r[8]+uint64_t(int64_t(int8_t(p[3])));
+                uint64_t value=uint64_t(int64_t(int32_t(uint32_t(le(p+4,4)))));
+                if(!write64(address,value)) return false;next+=8;
             } else {stop="unsupported_instruction";return false;}
         } else if(opcode==0x4c) {
             if(!fetch(rip,5,p)) return false;

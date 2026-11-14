@@ -72,7 +72,10 @@ const mac128k_mouse_witness_event *mac128k_mouse_witness(const mac128k *machine,
 
 /* Queues a guest M0110 key transition without touching host input. */
 bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed);
+bool mac128k_keyboard_fault(mac128k *machine,uint8_t command,uint32_t occurrence,uint8_t kind,uint32_t argument);
+bool mac128k_keyboard_fault_status(const mac128k *machine,uint64_t *cycle);
 bool mac128k_start_keyboard_witness(mac128k *machine,uint64_t first,uint64_t last);
+bool mac128k_keyboard_witness_limit(mac128k *machine,uint32_t limit);
 void mac128k_keyboard_input_due(mac128k *machine,uint64_t due,uint8_t code,bool pressed);
 const mac128k_keyboard_event *mac128k_keyboard_witness(const mac128k *machine,size_t *count,uint64_t *dropped,uint64_t *rejected);
 /* Optional VBL/fault and selected physical RAM-write witness. */

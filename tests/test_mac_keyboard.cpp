@@ -127,6 +127,44 @@ void test_queue_bounds()
     receive(keyboard, sent, 0x49);
 }
 
+void test_fault_injection()
+{
+    for(uint8_t kind=1;kind<=5;++kind) {
+        MacKeyboard k;
+        uint32_t arg=kind==3?5000:kind==4?0:kind==5?1000:0;
+        require(k.configure_fault(0x14,1,kind,arg),"fault configuration failed");
+        require(k.queue_key(0,true,0),"fault fixture queue failed");
+        k.set_auxiliary_control(shift_out,0);k.write_shift_register(0x14,0);
+        require(k.fault_triggered() && k.fault_cycle()==0,"fault did not activate");
+        if(kind==1 || kind==5) {
+            require(!k.advance(command_cycles+10000),"stalled command completed");
+            k.set_auxiliary_control(0,command_cycles+10001);
+            auto next=send(k,0x14,command_cycles+10002);receive(k,next,0x01);
+        } else {
+            require(k.advance(command_cycles),"fault fixture command did not finish");
+            k.set_auxiliary_control(shift_in,command_cycles);
+            if(kind==2) {
+                require(!k.advance(command_cycles+inquiry_cycles+reply_cycles),"suppressed reply completed");
+                k.set_auxiliary_control(0,command_cycles+inquiry_cycles+reply_cycles+1);
+                auto next=send(k,0x14,command_cycles+inquiry_cycles+reply_cycles+2);receive(k,next,0x01);
+            } else if(kind==3) {
+                require(!k.advance(command_cycles+reply_cycles+arg-1),"delayed reply was early");
+                require(k.advance(command_cycles+reply_cycles+arg),"delayed reply failed");
+                require(k.shift_register()==0x01,"delayed reply changed data");
+            } else {
+                receive(k,command_cycles,0x00);
+                auto next=send(k,0x14,command_cycles+reply_cycles);receive(k,next,0x01);
+            }
+        }
+    }
+    MacKeyboard occurrence;
+    require(occurrence.configure_fault(0x14,2,4,0xff),"occurrence configuration failed");
+    auto first=send(occurrence,0x14,0);receive(occurrence,first,0x7b);
+    require(!occurrence.fault_triggered(),"fault triggered too soon");
+    auto second=send(occurrence,0x14,first+reply_cycles);receive(occurrence,second,0xff);
+    require(occurrence.fault_triggered(),"second occurrence not selected");
+}
+
 } // namespace
 
 int main()
@@ -135,4 +173,5 @@ int main()
     test_transitions();
     test_shift_mode_changes();
     test_queue_bounds();
+    test_fault_injection();
 }

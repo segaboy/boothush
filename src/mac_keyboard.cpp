@@ -30,6 +30,14 @@ constexpr uint64_t inquiry_cycles = microseconds_to_cycles(250'000);
 
 } // namespace
 
+bool MacKeyboard::configure_fault(uint8_t command,uint32_t occurrence,uint8_t kind,uint32_t argument)
+{
+    if(!occurrence || kind<1 || kind>5 || ((kind==1 || kind==2) && argument) ||
+       ((kind==3 || kind==5) && !argument) || (kind==4 && argument>255)) return false;
+    fault_command_=command;fault_occurrence_=occurrence;fault_kind_=kind;fault_argument_=argument;
+    fault_seen_=0;fault_triggered_=false;fault_selected_=false;stall_command_=false;disconnect_=false;reply_suppressed_=false;return true;
+}
+
 void MacKeyboard::set_auxiliary_control(uint8_t value, uint64_t cycle)
 {
     record(cycle,mode,value);
@@ -65,21 +73,32 @@ void MacKeyboard::write_shift_register(uint8_t value, uint64_t cycle)
 void MacKeyboard::begin_send(uint64_t cycle)
 {
     command_ = shift_register_;
+    fault_selected_=false;stall_command_=disconnect_;reply_suppressed_=false;
+    if(fault_kind_ && !fault_triggered_ && command_==fault_command_ && ++fault_seen_==fault_occurrence_) {
+        fault_triggered_=true;fault_selected_=true;fault_cycle_=cycle;record(cycle,fault_start,fault_kind_);
+        if(fault_kind_==1) stall_command_=true;
+        if(fault_kind_==5) {disconnect_=true;stall_command_=true;reconnect_cycle_=cycle+fault_argument_;record(cycle,disconnected,0);}
+    }
     transfer_end_ = cycle + command_cycles;
     phase_ = Phase::sending;
 }
 
 void MacKeyboard::begin_reply(uint64_t cycle, uint8_t value, bool consumes_key)
 {
+    if(fault_selected_ && fault_kind_==4) {value=static_cast<uint8_t>(fault_argument_);consumes_key=false;}
     reply_ = value;
     consumes_key_ = consumes_key;
-    transfer_end_ = cycle + reply_cycles;
+    transfer_end_ = cycle + reply_cycles + (fault_selected_ && fault_kind_==3?fault_argument_:0);
     phase_ = Phase::receiving;
     record(cycle,reply_begin,value);
 }
 
 void MacKeyboard::prepare_reply(uint64_t cycle)
 {
+    if(fault_selected_ && fault_kind_==2) {
+        if(!reply_suppressed_) {record(cycle,reply_suppressed,command_);reply_suppressed_=true;}
+        return;
+    }
     switch (command_) {
     case inquiry:
         if (key_count_ == 0 && cycle < inquiry_expiry_) {
@@ -112,7 +131,7 @@ bool MacKeyboard::queue_key(uint8_t scan_code, bool pressed, uint64_t cycle)
     ++key_count_;
     record(cycle,queued,transition);
 
-    if (phase_ == Phase::waiting && command_ == inquiry &&
+    if (phase_ == Phase::waiting && !(fault_selected_ && fault_kind_==2) && command_ == inquiry &&
         shift_mode_ == shift_in && cycle < inquiry_expiry_) {
         begin_reply(cycle, keys_[head_], true);
     }
@@ -121,13 +140,14 @@ bool MacKeyboard::queue_key(uint8_t scan_code, bool pressed, uint64_t cycle)
 
 bool MacKeyboard::advance(uint64_t cycle)
 {
-    if (phase_ == Phase::sending && cycle >= transfer_end_) {
+    if(disconnect_ && cycle>=reconnect_cycle_) {disconnect_=false;record(cycle,reconnected,0);}
+    if (phase_ == Phase::sending && !stall_command_ && cycle >= transfer_end_) {
         inquiry_expiry_ = transfer_end_ + inquiry_cycles;
         phase_ = Phase::waiting;
         record(cycle,command_complete,command_);
         return true;
     }
-    if (phase_ == Phase::waiting && command_ == inquiry &&
+    if (phase_ == Phase::waiting && !(fault_selected_ && fault_kind_==2) && command_ == inquiry &&
         shift_mode_ == shift_in && cycle >= inquiry_expiry_) {
         begin_reply(inquiry_expiry_, no_transition);
     }

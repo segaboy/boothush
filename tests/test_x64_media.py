@@ -155,6 +155,14 @@ class X64MediaTest(unittest.TestCase):
         self.assertEqual((p.returncode, result['status'], result['steps'], result['rip']),
                          (0, 'step_limit', 22, 0x10001b6e))
         self.assertEqual(result['efi_sha256'], 'df284097539ed6b7c90700cb27589900b20d2e4c7574b7637ba5f387abba9fe9')
+        p = subprocess.run([os.environ['BOOTHUSH_EXE'], '--probe-x64-software', str(path), '--steps', '1000'],
+                           capture_output=True, text=True,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        result = json.loads(p.stdout)
+        self.assertEqual((p.returncode, result['status'], result['steps'], result['rip'], result['opcode']),
+                         (1, 'unsupported_instruction', 30, 0x10001cd4, 0x48))
+        self.assertFalse(result['firmware'])
+        self.assertFalse(result['valid_uefi_context'])
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
 
     def test_maps_synthetic_disk_and_rejects_bad_base(self):

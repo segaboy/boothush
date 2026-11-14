@@ -36,8 +36,28 @@ struct nes {
     bool controller_witness_enabled=false;
     uint64_t controller_witness_first=0,controller_witness_last=0,controller_witness_dropped=0;
     std::vector<nes_controller_witness_event> controller_witness;
+    nes_execution_filter execution_filter{};
+    std::vector<nes_execution_event> execution_witness;
+    uint64_t execution_dropped=0;
+    uint32_t instruction_bank=UINT32_MAX;
+    uint8_t interrupt_context=0;
+    bool execution_enabled=false;
     unsigned extra_cycles=0;
     const char *fault=nullptr;
+    uint32_t code_bank(uint16_t addr) const {
+        if(addr<0x8000) return UINT32_MAX;
+        if(mapper==2) return addr<0xc000?bank:uint32_t(prg.size()/16384-1);
+        return uint32_t(((addr-0x8000)%prg.size())/16384);
+    }
+    void trace_execution(uint8_t kind,uint16_t address,uint8_t value,uint8_t old,uint8_t old_valid,
+                         unsigned before,unsigned after,bool success) {
+        if(!execution_enabled || cpu_cycles<execution_filter.cycle_first || cpu_cycles>execution_filter.cycle_last) return;
+        uint32_t first=kind==0?execution_filter.exec_first:kind==1?execution_filter.read_first:execution_filter.write_first;
+        uint32_t length=kind==0?execution_filter.exec_length:kind==1?execution_filter.read_length:execution_filter.write_length;
+        if(!length || address<first || uint32_t(address)-first>=length) return;
+        if(execution_witness.size()==execution_filter.limit) {++execution_dropped;return;}
+        execution_witness.push_back({cpu_cycles,steps,ppu.frame_count(),instruction_pc,address,instruction_bank,before,after,kind,value,old,old_valid,uint8_t(success),interrupt_context});
+    }
     void trace_controller(uint8_t kind,uint8_t port,uint8_t value) {
         if(!controller_witness_enabled || cpu_cycles<controller_witness_first || cpu_cycles>controller_witness_last) return;
         if(controller_witness.size()==8192) {++controller_witness_dropped;return;}
@@ -52,7 +72,7 @@ struct nes {
         }
         return false;
     }
-    uint8_t read(uint16_t addr) {
+    uint8_t read_value(uint16_t addr) {
         uint8_t v=0;
         if (fault) return v;
         if(addr>=0x2000 && addr<0x4000) return ppu.read(addr&7);
@@ -67,7 +87,13 @@ struct nes {
         if (!peek(addr,v) && !fault) { fault="unsupported_bus_read"; fault_address=addr; }
         return v;
     }
-    void write(uint16_t addr,uint8_t v) {
+    uint8_t read(uint16_t addr) {
+        if(fault) return 0;
+        uint8_t v=read_value(addr);
+        if(execution_enabled) trace_execution(1,addr,v,0,0,bank,bank,!fault);
+        return v;
+    }
+    void write_value(uint16_t addr,uint8_t v) {
         if (fault) return;
         if (addr<0x2000) ram[addr&0x7ff]=v;
         else if(addr<0x4000) ppu.write(addr&7,v);
@@ -92,6 +118,13 @@ struct nes {
         else if(addr>=0x6000 && addr<0x8000 && !prg_ram.empty()) prg_ram[addr-0x6000]=v;
         else if(addr>=0x8000 && mapper==2) bank=unsigned(v)&unsigned(prg.size()/16384-1);
         else if(!fault) {fault="unsupported_bus_write";fault_address=addr;}
+    }
+    void write(uint16_t addr,uint8_t v) {
+        if(fault) return;
+        if(!execution_enabled) {write_value(addr,v);return;}
+        uint8_t old=0;bool valid=(addr<0x2000 || (addr>=0x6000 && addr<0x8000 && !prg_ram.empty())) && peek(addr,old);
+        unsigned before=bank;write_value(addr,v);
+        trace_execution(2,addr,v,old,uint8_t(valid),before,bank,!fault);
     }
     void advance(unsigned elapsed) {
         cpu_cycles+=elapsed;
@@ -157,6 +190,7 @@ struct nes {
     uint16_t indexed_read(uint8_t index) {uint16_t base=word(),addr=uint16_t(base+index);if((base&0xff00)!=(addr&0xff00))++extra_cycles;return addr;}
     bool step() {
         if(fault) return false;
+        instruction_pc=pc;if(execution_enabled) instruction_bank=code_bank(pc);interrupt_context=0;
         if(apu.dmc_dma_needed()) {
             uint16_t address=apu.dmc_dma_address();uint8_t value=0;
             if(!peek(address,value)){fault="unsupported_dmc_dma_source";fault_address=address;return false;}
@@ -164,15 +198,18 @@ struct nes {
         }
         bool nmi=ppu.take_nmi();
         if(nmi || (apu.irq() && !(p&I))) {
+            interrupt_context=nmi?1:2;
             push(uint8_t(pc>>8));push(uint8_t(pc));push(uint8_t((p&~0x10)|0x20));p|=I;
             uint16_t vector=nmi?0xfffa:0xfffe;
             uint8_t lo=read(vector),hi=read(uint16_t(vector+1));pc=uint16_t(lo|uint16_t(hi)<<8);
             advance(7);
             if(fault) return false;
+            interrupt_context=0;
         }
         extra_cycles=0;
         const uint8_t old_a=a,old_x=x,old_y=y,old_p=p,old_sp=sp;
-        instruction_pc=pc; opcode=byte(); if(fault) {pc=instruction_pc;return false;}
+        instruction_pc=pc;if(execution_enabled) instruction_bank=code_bank(pc);opcode=byte(); if(fault) {pc=instruction_pc;return false;}
+        if(execution_enabled) trace_execution(0,instruction_pc,opcode,0,0,bank,bank,true);
         if (!group1()) switch(opcode) {
         case 0xa2: x=byte();nz(x);break; case 0xa0: y=byte();nz(y);break;
         case 0xa6: x=read(byte());nz(x);break; case 0xb6: x=read(uint8_t(byte()+y));nz(x);break;
@@ -268,6 +305,18 @@ nes_cartridge_info nes_get_cartridge_info(const nes *m) {return {m->mapper,m->su
 void nes_destroy(nes *m) {delete m;}
 bool nes_step(nes *m) {return m->step();}
 void nes_set_controller(nes *m,unsigned port,uint8_t buttons) {if(port<2) m->controller_live[port]=buttons;}
+bool nes_enable_execution_witness(nes *m,const nes_execution_filter *f) {
+    if(!m || !f || !f->limit || f->limit>65536 || f->cycle_first>f->cycle_last ||
+       (!f->exec_length && !f->read_length && !f->write_length) ||
+       f->exec_first>65536 || f->exec_length>65536-f->exec_first ||
+       f->read_first>65536 || f->read_length>65536-f->read_first ||
+       f->write_first>65536 || f->write_length>65536-f->write_first) return false;
+    try {m->execution_witness.clear();m->execution_witness.reserve(f->limit);} catch(...) {return false;}
+    m->execution_filter=*f;m->execution_dropped=0;m->execution_enabled=true;return true;
+}
+const nes_execution_event *nes_execution_witness(const nes *m,size_t *count,uint64_t *dropped) {
+    *count=m->execution_witness.size();*dropped=m->execution_dropped;return m->execution_witness.data();
+}
 bool nes_enable_controller_witness(nes *m,uint64_t first,uint64_t last) {
     if(first>last) return false;
     try {m->controller_witness.reserve(8192);} catch(...) {return false;}

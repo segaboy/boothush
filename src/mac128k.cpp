@@ -158,6 +158,7 @@ struct mac128k {
     uint64_t witness_ram_matched = 0, witness_ram_dropped = 0;
     std::unique_ptr<mac128k_keyboard_event[]> keyboard_witness;
     size_t keyboard_witness_count=0;
+    uint32_t keyboard_witness_limit=8192;
     uint64_t keyboard_witness_first=0,keyboard_witness_last=0,keyboard_witness_dropped=0,keyboard_rejected=0;
     std::unique_ptr<mac128k_display_event[]> display_witness;
     size_t display_witness_count=0;
@@ -170,7 +171,7 @@ struct mac128k {
 
     void keyboard_observe(uint64_t cycle,uint8_t kind,uint8_t value,uint8_t queue,uint64_t due=0) {
         if(!keyboard_witness || cycle<keyboard_witness_first || cycle>keyboard_witness_last) return;
-        if(keyboard_witness_count==8192) {++keyboard_witness_dropped;return;}
+        if(keyboard_witness_count==keyboard_witness_limit) {++keyboard_witness_dropped;return;}
         keyboard_witness[keyboard_witness_count++]={cycle,due,cpu.getPC(),kind,value,queue};
     }
     static void keyboard_trace(void *context,uint64_t cycle,MacKeyboard::TraceKind kind,uint8_t value,size_t queue) {
@@ -823,6 +824,14 @@ bool mac128k_inject_key(mac128k *machine, uint8_t code, bool pressed)
     if(!accepted) ++machine->keyboard_rejected;
     return accepted;
 }
+bool mac128k_keyboard_fault(mac128k *machine,uint8_t command,uint32_t occurrence,uint8_t kind,uint32_t argument)
+{
+    return machine && machine->keyboard.configure_fault(command,occurrence,kind,argument);
+}
+bool mac128k_keyboard_fault_status(const mac128k *machine,uint64_t *cycle)
+{
+    *cycle=machine->keyboard.fault_cycle();return machine->keyboard.fault_triggered();
+}
 
 bool mac128k_start_keyboard_witness(mac128k *machine,uint64_t first,uint64_t last)
 {
@@ -830,9 +839,15 @@ bool mac128k_start_keyboard_witness(mac128k *machine,uint64_t first,uint64_t las
     auto rows=std::unique_ptr<mac128k_keyboard_event[]>(new(std::nothrow) mac128k_keyboard_event[8192]);
     if(!rows) return false;
     machine->keyboard_witness=std::move(rows);machine->keyboard_witness_count=0;
+    machine->keyboard_witness_limit=8192;
     machine->keyboard_witness_dropped=0;machine->keyboard_rejected=0;
     machine->keyboard_witness_first=first;machine->keyboard_witness_last=last;
     machine->keyboard.set_trace(&mac128k::keyboard_trace,machine);return true;
+}
+bool mac128k_keyboard_witness_limit(mac128k *machine,uint32_t limit)
+{
+    if(!machine || !machine->keyboard_witness || !limit || limit>8192 || machine->keyboard_witness_count>limit) return false;
+    machine->keyboard_witness_limit=limit;return true;
 }
 void mac128k_keyboard_input_due(mac128k *machine,uint64_t due,uint8_t code,bool pressed)
 {

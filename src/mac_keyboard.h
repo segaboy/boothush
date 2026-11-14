@@ -10,10 +10,14 @@ class MacKeyboard {
 public:
     static constexpr uint8_t max_scan_code = 0x39;
     static constexpr std::size_t queue_capacity = 64;
-    enum TraceKind : uint8_t { queued, rejected, mode, shift_write, command_complete, reply_begin, reply_complete, key_delivered, shift_read };
+    enum TraceKind : uint8_t { queued, rejected, mode, shift_write, command_complete, reply_begin, reply_complete, key_delivered, shift_read,
+                               fault_start=10, disconnected, reconnected, reply_suppressed };
     using Trace = void (*)(void *, uint64_t, TraceKind, uint8_t, std::size_t);
     void set_trace(Trace trace, void *context) { trace_=trace; context_=context; }
     std::size_t queue_size() const { return key_count_; }
+    bool configure_fault(uint8_t command,uint32_t occurrence,uint8_t kind,uint32_t argument);
+    bool fault_triggered() const { return fault_triggered_; }
+    uint64_t fault_cycle() const { return fault_cycle_; }
 
     void set_auxiliary_control(uint8_t value, uint64_t cycle);
     void write_shift_register(uint8_t value, uint64_t cycle);
@@ -47,6 +51,10 @@ private:
     bool preloaded_ = false;
     Trace trace_ = nullptr;
     void *context_ = nullptr;
+    uint8_t fault_command_=0,fault_kind_=0;
+    uint32_t fault_occurrence_=0,fault_seen_=0,fault_argument_=0;
+    bool fault_triggered_=false,fault_selected_=false,stall_command_=false,disconnect_=false,reply_suppressed_=false;
+    uint64_t fault_cycle_=0,reconnect_cycle_=0;
 };
 
 #endif

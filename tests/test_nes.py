@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 import wave
@@ -221,6 +222,63 @@ class NesTarget(unittest.TestCase):
                      ('--capture-series',str(self.file.parent/'bad'),'--capture-cycle','1','--capture-memory','0x1fff:2'),
                      ('--capture-series',str(self.file.parent/'bad'),'--capture-cycle','1','--capture-oam','255:2')):
             with self.subTest(args=args):self.assertEqual(self.run_nes(image,*args)[0],2)
+
+    def test_filtered_execution_witness_banks_reads_writes_and_overflow(self):
+        image=bytearray(b'NES\x1a'+bytes(12));image[4]=2;image[6]=0x20;image[7]=8;image[8]=0x10;image[11]=7
+        prg=bytearray([0xea]*32768)
+        prg[0:5]=bytes.fromhex('a901 8d0080')
+        prg[16384:16384+8]=bytes.fromhex('a942 8510 ea 4c0080')
+        prg[-4:-2]=bytes.fromhex('0080');image+=prg
+        path=self.file.parent/'cpu.trace';controller=self.file.parent/'controller.trace'
+        common=('--until-pc','0x8004','--inspect','0x10:1')
+        code,plain=self.run_nes(image,*common)
+        args=common+('--nes-witness',str(path),'--nes-witness-exec','0x8000:8',
+                     '--nes-witness-read','0x8000:8','--nes-witness-write','0x10:32753',
+                     '--controller-witness',str(controller))
+        code2,traced=self.run_nes(image,*args)
+        self.assertEqual((code,code2),(0,0));meta=traced.pop('nes_witness');traced.pop('controller_witness')
+        self.assertEqual(traced,plain);self.assertEqual(plain['memory']['bytes'],'42');self.assertEqual(meta['dropped'],0)
+        lines=path.read_text().splitlines();header=lines[0].split();rows=[line.split() for line in lines[2:]]
+        self.assertEqual(header[0],'BHNESCPU1');self.assertEqual(header[-1],hashlib.sha256(image).hexdigest())
+        executed=[r for r in rows if r[7]=='exec' and int(r[3])==0x8000]
+        self.assertEqual([int(r[4]) for r in executed],[0,1])
+        writes=[r for r in rows if r[7]=='write']
+        self.assertTrue(any(int(r[8])==0x8000 and (int(r[5]),int(r[6]))==(0,1) and int(r[10])==0 for r in writes))
+        self.assertTrue(any(int(r[8])==0x10 and int(r[9])==0x42 and int(r[10])==1 and int(r[11])==0 for r in writes))
+        self.assertTrue(any(r[7]=='read' for r in rows))
+        self.assertTrue(all((r[7]=='exec' and 0x8000<=int(r[8])<0x8008) or
+                            (r[7]=='read' and 0x8000<=int(r[8])<0x8008) or
+                            (r[7]=='write' and 0x10<=int(r[8])<=0x8000) for r in rows))
+        repeat=self.file.parent/'repeat.trace'
+        code3,_=self.run_nes(image,*common,'--nes-witness',str(repeat),'--nes-witness-exec','0x8000:8',
+                             '--nes-witness-read','0x8000:8','--nes-witness-write','0x10:32753')
+        self.assertEqual(code3,0);self.assertEqual(path.read_bytes(),repeat.read_bytes())
+        symbols=self.file.parent/'symbols.json';annotated=self.file.parent/'annotated.json'
+        symbols.write_text(json.dumps({'rom_sha256':header[-1],'build_identity':'synthetic fixture',
+                                      'symbols':[{'name':'bank-zero','address':0x8000,'bank':0},
+                                                 {'name':'bank-one','address':0x8000,'bank':1}]}),encoding='utf-8')
+        helper=Path(__file__).resolve().parents[1]/'scripts'/'annotate_nes_witness.py'
+        cmd=[sys.executable,helper,'--trace',path,'--symbols',symbols,'--output',annotated]
+        p=subprocess.run(cmd,capture_output=True,text=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(p.returncode,0,p.stderr)
+        mapped=json.loads(annotated.read_text());self.assertTrue(mapped['labels_are_caller_supplied'])
+        hits=[r for r in mapped['rows'] if r['kind']=='exec' and r['pc']==0x8000]
+        self.assertEqual([r['pc_labels'] for r in hits],[['bank-zero'],['bank-one']])
+        symbols.write_text(json.dumps({'rom_sha256':'0'*64,'symbols':[]}),encoding='utf-8')
+        mismatch=self.file.parent/'mismatch.json';cmd[-1]=mismatch
+        self.assertNotEqual(subprocess.run(cmd,capture_output=True).returncode,0);self.assertFalse(mismatch.exists())
+        tiny=self.file.parent/'tiny.trace'
+        code4,r=self.run_nes(image,*common,'--nes-witness',str(tiny),'--nes-witness-exec','0x8000:8',
+                             '--nes-witness-limit','1')
+        self.assertEqual((code4,r['nes_witness']['events']),(0,1));self.assertGreater(r['nes_witness']['dropped'],0)
+        filtered=self.file.parent/'filtered.trace'
+        code5,r=self.run_nes(image,*common,'--nes-witness',str(filtered),'--nes-witness-write','0x10:1',
+                             '--nes-witness-cycles','0:0')
+        self.assertEqual((code5,r['nes_witness']['events']),(0,0))
+        for options in (('--nes-witness',str(path)),('--nes-witness-exec','0:1'),
+                        ('--nes-witness',str(path),'--nes-witness-write','65535:2'),
+                        ('--nes-witness',str(path),'--nes-witness-exec','0:1','--nes-witness-limit','0')):
+            with self.subTest(options=options): self.assertEqual(self.run_nes(image,*options)[0],2)
 
     def test_controller_witness_guest_reads_and_overflow(self):
         program=bytes.fromhex('a901 8d1640 a900 8d1640 ad1640 8500 ad1740 8501 4c0080')

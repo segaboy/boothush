@@ -83,6 +83,30 @@ def make_four_key_rom():
 
 
 class MacKeyboardIntegration(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('BOOTHUSH_CLASSICK_KEYBOARD_ROM'),'ClasSICK keyboard ROM not supplied')
+    def test_classick_keyboard_faults_on_actual_guest(self):
+        rom=Path(os.environ['BOOTHUSH_CLASSICK_KEYBOARD_ROM'])
+        digest='b3a50ad806b589fdc02a4de579e6d72700c9107fb273d9ca73026320bebed807'
+        self.assertEqual(hashlib.sha256(rom.read_bytes()).hexdigest(),digest)
+        with tempfile.TemporaryDirectory(dir=os.environ.get('BOOTHUSH_TEST_TMP')) as temp:
+            for kind,arg,invalid,timeout in ((1,0,0,1),(2,0,0,1),(3,991993,0,0),
+                                             (3,991994,0,1),(4,0,1,0),(5,1500000,0,1)):
+                with self.subTest(kind=kind,arg=arg):
+                    witness=Path(temp)/f'{kind}-{arg}.trace'
+                    cmd=[os.environ['BOOTHUSH_EXE'],'--machine','mac128k','--rom',str(rom),'--cycles','60000000',
+                         '--timeout-ms','30000','--keyboard-fault',f'0x14:1:{kind}:{arg}',
+                         '--keyboard-witness',str(witness),'--keyboard-witness-range','56840000:59000000','--inspect','0xce8:56']
+                    proc=subprocess.run(cmd,capture_output=True,text=True,timeout=35,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                    self.assertEqual(proc.returncode,0,(proc.stdout,proc.stderr));result=json.loads(proc.stdout)
+                    self.assertTrue(result['keyboard_fault']['triggered']);self.assertEqual(result['keyboard_witness']['dropped'],0)
+                    raw=bytes.fromhex(result['memory']['bytes'])
+                    self.assertEqual(raw[:4],b'KBD1');self.assertEqual(int.from_bytes(raw[8:12],'big'),invalid)
+                    self.assertEqual(int.from_bytes(raw[12:16],'big'),timeout)
+                    rows=[line.split() for line in witness.read_text().splitlines()[2:]]
+                    self.assertTrue(any(row[2]=='fault_start' and int(row[3])==kind for row in rows))
+                    if kind==2:self.assertTrue(any(row[2]=='reply_suppressed' for row in rows))
+                    if kind==5:self.assertTrue(any(row[2]=='disconnect' for row in rows) and any(row[2]=='reconnect' for row in rows))
+        self.assertEqual(hashlib.sha256(rom.read_bytes()).hexdigest(),digest)
     @unittest.skipUnless(os.environ.get('BOOTHUSH_STB_MAC_PROBE'),'port controls probe not supplied')
     def test_port_controls_probe_witness_and_vbl_series(self):
         rom=Path(os.environ['BOOTHUSH_STB_MAC_PROBE'])
@@ -156,6 +180,9 @@ class MacKeyboardIntegration(unittest.TestCase):
             small=run(['--keyboard-witness',str(root/'small.txt'),'--keyboard-witness-range','0:100'])
             self.assertLess(small['keyboard_witness']['events'],100)
             self.assertEqual(small['keyboard_witness']['dropped'],0)
+            tiny=run(['--keyboard-witness',str(root/'tiny.txt'),'--keyboard-witness-limit','1'])
+            stats=tiny.pop('keyboard_witness');self.assertEqual(tiny,plain)
+            self.assertEqual((stats['events'],stats['limit']),(1,1));self.assertGreater(stats['dropped'],0)
 
     def test_readiness_relative_key_press_and_release_are_observed(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get('BOOTHUSH_TEST_TMP')) as temp:

@@ -10,7 +10,7 @@ The [x64 enablement notes](docs/classick-x64.md) describe the headless ClasSICK 
 
 The experimental [NES target](docs/nes.md) runs supported NROM and NES 2.0 mapper-2/submapper-1 cartridges headlessly, with NTSC/PAL timing models, independent scheduled input for both controllers, cycle-aligned input and memory observations, and approximate PPU and audio capture. CPU, graphics, audio and cartridge compatibility remain incomplete.
 
-The [capture guide](docs/headless-capture.md) describes bounded, indexed NES and Mac frame series. The Mac profile also has opt-in [keyboard](docs/mac-keyboard.md) and display witnesses for guest input and redraw diagnostics.
+The [capture guide](docs/headless-capture.md) describes bounded, indexed NES and Mac frame series. The NES profile provides a filtered execution witness, while the Mac profile has opt-in [keyboard](docs/mac-keyboard.md) fault injection and keyboard and display witnesses. The small [scenario comparison helper](docs/scenario-comparison.md) compares explicitly mapped captured values and guest times.
 
 Other Windows applications can embed that same core using the experimental [NES C library and API](docs/nes-api.md). The build installs a DLL, C header and CMake package; an independent consumer example is included.
 
@@ -51,6 +51,7 @@ Choose a writable build directory. To build the executable without Python, add `
 - Set both `BOOTHUSH_CLASSICK_X64_DISK` and `BOOTHUSH_CLASSICK_X64_EFI` to enable the optional pinned ClasSICK x64 media inspection test. It validates and compares the media without running it.
 - Set `BOOTHUSH_STB_UNROM` to the user-supplied, hash-pinned Super Tilt Bro beta ROM to exercise cycle-aligned controller and multi-frame capture scenarios. Its source revision is unknown; no ROM is distributed here.
 - Set `BOOTHUSH_STB_MAC_PROBE` to the independently generated port controls ROM (SHA-256 `31b2666be66ac7a02d576998cb9b46aec3a91245d16679877d593748fd581fc6`) to verify keyboard delivery and VBL-indexed capture against the port's probe.
+- Set `BOOTHUSH_CLASSICK_KEYBOARD_ROM` to the ClasSICK keyboard candidate (SHA-256 `b3a50ad806b589fdc02a4de579e6d72700c9107fb273d9ca73026320bebed807`) to run the guest's timeout and malformed-reply fault tests.
 
 ## Local process API
 

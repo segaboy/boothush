@@ -22,6 +22,8 @@ An independent x64 page-allocation and memory-map-key state model has synthetic 
 
 The opt-in `--mouse-witness-detail 1` extends the existing bounded witness with scheduled and accepted input, pending transitions, guard deadlines, CPU interrupt acceptance and instruction context. Add `--mouse-witness-memory ADDRESS:LENGTH` to include filtered guest RAM writes in the same ordered stream. It retains the existing witness by default and works headlessly with record/replay. See the [correlated mouse witness guide](mac-mouse-witness.md) for exact 2,048- and 4,096-cycle commands, field definitions and limits. A transition while an SCC interrupt is pending is an observation in this model, not a diagnosis or physical-hardware timing result.
 
+For keyboard timeout and malformed-byte paths, `--keyboard-fault` selects a single command occurrence and deterministic stall, missing, delayed, malformed, or disconnected response. Use it with `--keyboard-witness` and inspect fault, trace, input and guest diagnostic status. See [keyboard fault injection](mac-keyboard.md#deterministic-injected-keyboard-faults) for the modes, queue semantics, and pinned ClasSICK guest results.
+
 ## Inspect several regions at one stop
 
 Repeat `--inspect` for each physical range. Up to 16 ranges are allowed, with 4,096 bytes per range and 16,384 bytes total. Overlapping ranges are returned independently in request order. Reads use side-effect-free diagnostic access to Mac RAM or PC conventional RAM and its video aperture. A single range returns the established `memory` object. Multiple ranges return `memory_ranges`, whose entries each contain `address` and hexadecimal `bytes`.

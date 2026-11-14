@@ -96,6 +96,8 @@ struct request {
     const wchar_t *mouse_replay_path;
     const wchar_t *mouse_witness_path;
     const wchar_t *keyboard_witness_path;
+    bool keyboard_fault_set;
+    uint32_t keyboard_fault[4];
     const wchar_t *display_witness_path;
     const wchar_t *pc_witness_path;
     uint32_t cycle_limit;
@@ -124,12 +126,14 @@ struct request {
     uint32_t mouse_witness_first;
     uint32_t mouse_witness_last;
     uint32_t keyboard_witness_first,keyboard_witness_last;
+    uint32_t keyboard_witness_limit;
     uint32_t display_witness_first,display_witness_last;
     uint8_t mouse_dcd_invert;
     bool mouse_invert_set;
     bool mouse_guard_set;
     bool mouse_witness_range_set;
     bool keyboard_witness_range_set;
+    bool keyboard_witness_limit_set;
     bool display_witness_range_set;
     bool mouse_witness_detail;
     bool raw_mouse_phases;
@@ -176,7 +180,8 @@ struct mouse_session {
     bool witness_detail;
 };
 
-struct keyboard_summary { size_t count,scheduled,accepted; uint64_t dropped,rejected; };
+struct keyboard_summary { size_t count,scheduled,accepted; uint64_t dropped,rejected; uint32_t limit;bool range_reached; };
+struct keyboard_fault_result { uint32_t command,occurrence,kind,argument;bool triggered;uint64_t cycle; };
 struct display_summary { size_t count; uint64_t dropped; };
 
 struct machine_state {
@@ -395,7 +400,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     for (int index = 1; index < argc; index += 2) {
         const wchar_t *option = argv[index];
         const wchar_t *value = argv[index + 1];
-        uint32_t fields[3];
+        uint32_t fields[4];
 
         if (*value == '\0') {
             return "option values must be nonempty";
@@ -459,6 +464,14 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_witness_path = value;
         } else if (wcscmp(option, L"--keyboard-witness") == 0 && request->keyboard_witness_path == NULL) {
             request->keyboard_witness_path = value;
+        } else if(wcscmp(option,L"--keyboard-fault")==0 && !request->keyboard_fault_set) {
+            if(!parse_fields(value,fields,4) || fields[0]>255 || !fields[1] || fields[2]<1 || fields[2]>5 ||
+               ((fields[2]==1 || fields[2]==2) && fields[3]) || ((fields[2]==3 || fields[2]==5) && (!fields[3] || fields[3]>MAX_CYCLES)) ||
+               (fields[2]==4 && fields[3]>255)) return "keyboard-fault requires command:occurrence:kind:argument";
+            memcpy(request->keyboard_fault,fields,sizeof(request->keyboard_fault));request->keyboard_fault_set=true;
+        } else if(wcscmp(option,L"--keyboard-witness-limit")==0 && !request->keyboard_witness_limit_set) {
+            if(!parse_fields(value,fields,1) || !fields[0] || fields[0]>8192) return "keyboard witness limit must be 1..8192";
+            request->keyboard_witness_limit=fields[0];request->keyboard_witness_limit_set=true;
         } else if (wcscmp(option, L"--keyboard-witness-range") == 0 && !request->keyboard_witness_range_set) {
             if(!parse_fields(value,fields,2) || fields[0]>fields[1] || fields[1]>MAX_CYCLES) return "invalid keyboard witness cycle range";
             request->keyboard_witness_first=fields[0];request->keyboard_witness_last=fields[1];request->keyboard_witness_range_set=true;
@@ -601,7 +614,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if(request->series.memory.length && (request->series.memory.address>=MAC128K_RAM_SIZE ||
        request->series.memory.length>MAC128K_RAM_SIZE-request->series.memory.address)) return "capture-memory must stay in Mac RAM";
     if(request->keyboard_witness_range_set && !request->keyboard_witness_path) return "keyboard witness range requires keyboard witness";
+    if(request->keyboard_witness_limit_set && !request->keyboard_witness_path) return "keyboard witness limit requires keyboard witness";
+    if(!request->keyboard_witness_limit_set) request->keyboard_witness_limit=8192;
     if(request->keyboard_witness_path && request->machine!=MACHINE_MAC128K) return "keyboard witness requires mac128k";
+    if(request->keyboard_fault_set && request->machine!=MACHINE_MAC128K) return "keyboard fault requires mac128k";
     if(!request->keyboard_witness_range_set) request->keyboard_witness_last=MAX_CYCLES;
     if((request->display_witness_range_set || request->display_witness_memory.length) && !request->display_witness_path) return "display witness filters require display witness";
     if(request->display_witness_path && request->machine!=MACHINE_MAC128K) return "display witness requires mac128k";
@@ -847,7 +863,8 @@ static bool write_keyboard_witness(const mac128k *machine,const struct request *
                                    uint64_t stop,struct keyboard_summary *summary)
 {
     static const char *const names[]={"queued","rejected","mode","shift_write","command_complete",
-                                      "reply_begin","reply_complete","key_delivered","shift_read","input_due"};
+                                      "reply_begin","reply_complete","key_delivered","shift_read","input_due",
+                                      "fault_start","disconnect","reconnect","reply_suppressed"};
     const mac128k_keyboard_event *events=mac128k_keyboard_witness(machine,&summary->count,&summary->dropped,&summary->rejected);
     size_t capacity=256+summary->count*140;char *data=malloc(capacity);if(!data) return false;
     int len=snprintf(data,capacity,"BHMACKEY1 %u %u %" PRIu64 " %zu %" PRIu64 " %" PRIu64 "\ncycle pc kind value queue due\n",
@@ -857,7 +874,7 @@ static bool write_keyboard_witness(const mac128k *machine,const struct request *
     for(size_t i=0;i<summary->count;i++) {
         const mac128k_keyboard_event *e=&events[i];
         len=snprintf(data+used,capacity-used,"%" PRIu64 " %u %s %u %u %" PRIu64 "\n",e->cycle,e->pc,
-                     e->kind<10?names[e->kind]:"unknown",e->value,e->queue,e->due);
+                     e->kind<14?names[e->kind]:"unknown",e->value,e->queue,e->due);
         if(len<0 || (size_t)len>=capacity-used) {free(data);return false;}
         used+=(size_t)len;
     }
@@ -1147,7 +1164,7 @@ static void print_result(const char *status, enum machine_kind machine,
                          const uint8_t *bytes, const struct inspection *inspect, size_t inspect_count,
                          const struct mouse_session *mouse, const video_capture *video,
                          const struct frame_series *series,const struct keyboard_summary *keyboard,
-                         const struct display_summary *display)
+                         const struct display_summary *display,const struct keyboard_fault_result *fault)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
@@ -1186,9 +1203,15 @@ static void print_result(const char *status, enum machine_kind machine,
         if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
         printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
     }
-    if(keyboard) printf(",\"keyboard_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"rejected\":%" PRIu64 ",\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu,\"limit\":8192}",
-                        keyboard->count,keyboard->dropped,keyboard->rejected,keyboard->scheduled,keyboard->accepted,keyboard->scheduled-keyboard->accepted);
+    if(keyboard) printf(",\"keyboard_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"rejected\":%" PRIu64 ",\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu,\"limit\":%u,\"range_reached\":%s}",
+                        keyboard->count,keyboard->dropped,keyboard->rejected,keyboard->scheduled,keyboard->accepted,keyboard->scheduled-keyboard->accepted,keyboard->limit,keyboard->range_reached?"true":"false");
     if(display) printf(",\"display_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"limit\":8192}",display->count,display->dropped);
+    if(fault) {
+        printf(",\"keyboard_fault\":{\"command\":%u,\"occurrence\":%u,\"kind\":%u,\"argument\":%u,\"triggered\":%s",
+               fault->command,fault->occurrence,fault->kind,fault->argument,fault->triggered?"true":"false");
+        if(fault->triggered) printf(",\"cycle\":%" PRIu64,fault->cycle);
+        putchar('}');
+    }
     if(series && series->path && mouse && mouse->request) {
         static const char *const kinds[]={"button","phase","motion","key","scancode","window"};
         printf(",\"series_inputs\":{\"relative_to_readiness\":%s,\"events\":[",mouse->readiness_requested?"true":"false");
@@ -1228,7 +1251,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -1697,9 +1720,29 @@ static bool write_nes_controller_witness(const wchar_t *path, const nes *machine
 
 /* NES starts as a separate bounded CPU development target. Unsupported machine
    options must not fall through into Mac or PC behavior. */
+static bool write_nes_execution_witness(const wchar_t *path,const nes *machine,const nes_execution_filter *f,
+                                        uint64_t stop,const uint8_t digest[32],size_t *count,uint64_t *dropped)
+{
+    const nes_execution_event *rows=nes_execution_witness(machine,count,dropped);
+    size_t capacity=512+*count*240;char *data=malloc(capacity);if(!data) return false;
+    char hex[65];for(size_t i=0;i<32;i++) snprintf(hex+i*2,3,"%02x",digest[i]);
+    int n=snprintf(data,capacity,"BHNESCPU1 %" PRIu64 " %" PRIu64 " %" PRIu64 " %zu %" PRIu64 " %u %s\ncycle step frame pc pc_bank selected_before selected_after kind address value old_valid old_value success interrupt\n",
+                   f->cycle_first,f->cycle_last,stop,*count,*dropped,f->limit,hex);
+    if(n<0 || (size_t)n>=capacity) {free(data);return false;}size_t used=(size_t)n;
+    for(size_t i=0;i<*count;i++) {
+        const nes_execution_event *e=&rows[i];const char *kind=e->kind==0?"exec":e->kind==1?"read":"write";
+        n=snprintf(data+used,capacity-used,"%" PRIu64 " %" PRIu64 " %" PRIu64 " %u %u %u %u %s %u %u %u %u %u %u\n",
+                   e->cycle,e->step,e->frame,e->pc,e->pc_bank,e->selected_before,e->selected_after,kind,e->address,e->value,e->old_valid,e->old_value,e->success,e->interrupt);
+        if(n<0 || (size_t)n>=capacity-used) {free(data);return false;}used+=(size_t)n;
+    }
+    bool ok=write_new_file(path,"",0,(const uint8_t *)data,(DWORD)used);free(data);return ok;
+}
+
 static int run_nes(int argc, wchar_t **argv)
 {
-    const wchar_t *path=NULL,*frame_path=NULL,*audio_path=NULL,*video_path=NULL,*controller_witness_path=NULL;
+    const wchar_t *path=NULL,*frame_path=NULL,*audio_path=NULL,*video_path=NULL,*controller_witness_path=NULL,*execution_witness_path=NULL;
+    nes_execution_filter execution_filter={0};execution_filter.cycle_last=UINT64_MAX;execution_filter.limit=8192;
+    bool execution_cycles_set=false,execution_limit_set=false;
     uint32_t steps=0, timeout=0, target=0, fields[3], ppu_addr=0, ppu_len=0, oam_addr=0, oam_len=0;
     struct {uint32_t address,length;} inspections[8];size_t inspection_count=0;
     struct frame_series series={0};
@@ -1730,6 +1773,22 @@ static int run_nes(int argc, wchar_t **argv)
         else if(wcscmp(o,L"--audio")==0 && !audio_path && *v) audio_path=v;
         else if(wcscmp(o,L"--video")==0 && !video_path && *v) video_path=v;
         else if(wcscmp(o,L"--controller-witness")==0 && !controller_witness_path && *v) controller_witness_path=v;
+        else if(wcscmp(o,L"--nes-witness")==0 && !execution_witness_path && *v) execution_witness_path=v;
+        else if((!wcscmp(o,L"--nes-witness-exec") || !wcscmp(o,L"--nes-witness-read") || !wcscmp(o,L"--nes-witness-write")) &&
+                parse_fields(v,fields,2) && fields[0]<65536 && fields[1]>0 && fields[1]<=65536-fields[0]) {
+            uint32_t *first,*length;
+            if(!wcscmp(o,L"--nes-witness-exec")) {first=&execution_filter.exec_first;length=&execution_filter.exec_length;}
+            else if(!wcscmp(o,L"--nes-witness-read")) {first=&execution_filter.read_first;length=&execution_filter.read_length;}
+            else {first=&execution_filter.write_first;length=&execution_filter.write_length;}
+            if(*length) return request_error("duplicate NES witness filter");
+            *first=fields[0];*length=fields[1];
+        }
+        else if(!wcscmp(o,L"--nes-witness-cycles") && !execution_cycles_set && parse_fields(v,fields,2) && fields[0]<=fields[1] && fields[1]<=MAX_CYCLES) {
+            execution_filter.cycle_first=fields[0];execution_filter.cycle_last=fields[1];execution_cycles_set=true;
+        }
+        else if(!wcscmp(o,L"--nes-witness-limit") && !execution_limit_set && parse_fields(v,fields,1) && fields[0]>0 && fields[0]<=65536) {
+            execution_filter.limit=fields[0];execution_limit_set=true;
+        }
         else if(wcscmp(o,L"--controller-witness-cycles")==0 && !controller_witness_range && parse_fields(v,fields,2) && fields[0]<=fields[1] && fields[1]<=MAX_CYCLES) {
             controller_witness_first=fields[0];controller_witness_last=fields[1];controller_witness_range=true;
         }
@@ -1789,6 +1848,8 @@ static int run_nes(int argc, wchar_t **argv)
     if(until_ready_cycle_set && !readiness_set) return request_error("NES until-input-cycle requires input-after");
     if(controller_timing && event_mode!=0) return request_error("NES controller-timing requires an instruction-based controller schedule");
     if(controller_witness_range && !controller_witness_path) return request_error("NES controller witness cycle range requires a witness path");
+    if((execution_witness_path!=NULL)!=((execution_filter.exec_length||execution_filter.read_length||execution_filter.write_length)!=0)) return request_error("NES witness requires a path and at least one address filter");
+    if((execution_cycles_set || execution_limit_set) && !execution_witness_path) return request_error("NES witness settings require a witness path");
     if(!video_path && (video_fps_set || video_limit_set || video_start_set)) return request_error("NES video settings require video");
     struct image rom={0};
     const char *error=read_image(path,&rom,16,16+524288+8192,"NES image exceeds supported cartridge dimensions");
@@ -1805,6 +1866,7 @@ static int run_nes(int argc, wchar_t **argv)
     if(!n) return request_error(error);
     if(!series_identity(&series,digest)) {nes_destroy(n);return request_error("cannot identify executable for frame series");}
     if(!series_allocate(&series,256u*240u*3u)) {nes_destroy(n);return request_error("cannot allocate frame series");}
+    if(execution_witness_path && !nes_enable_execution_witness(n,&execution_filter)) {nes_destroy(n);free(series.data);return request_error("cannot allocate NES execution witness");}
     if(controller_witness_path && !nes_enable_controller_witness(n,controller_witness_first,controller_witness_last)) {nes_destroy(n);return request_error("cannot allocate NES controller witness");}
     nes_set_controller(n,0,(uint8_t)controller[0]);nes_set_controller(n,1,(uint8_t)controller[1]);
     nes_cartridge_info cartridge=nes_get_cartridge_info(n);
@@ -1862,7 +1924,7 @@ static int run_nes(int argc, wchar_t **argv)
     if(video_path && !video_finish(&video,video.failed)) {nes_destroy(n);return request_error("cannot finish NES video capture");}
     if(video.failed) {nes_destroy(n);return request_error("cannot write NES video capture");}
     nes_state state=nes_get_state(n); uint8_t bytes[8][4096],ppu_bytes[4096],oam_bytes[256];
-    size_t witness_count=0; uint64_t witness_dropped=0;
+    size_t witness_count=0,execution_count=0; uint64_t witness_dropped=0,execution_dropped=0;
     for(size_t i=0;i<inspection_count;i++) if(!nes_inspect(n,(uint16_t)inspections[i].address,bytes[i],inspections[i].length)) {nes_destroy(n);return request_error("NES inspection must stay within supported RAM or cartridge ROM");}
     if(ppu_len && !nes_inspect_ppu(n,(uint16_t)ppu_addr,ppu_bytes,ppu_len)) {nes_destroy(n);return request_error("invalid NES PPU inspection");}
     if(oam_len && !nes_inspect_oam(n,(uint16_t)oam_addr,oam_bytes,oam_len)) {nes_destroy(n);return request_error("invalid NES OAM inspection");}
@@ -1887,6 +1949,9 @@ static int run_nes(int argc, wchar_t **argv)
     if(controller_witness_path && !write_nes_controller_witness(controller_witness_path,n,controller_witness_first,controller_witness_last,state.cpu_cycles,&witness_count,&witness_dropped)) {
         nes_destroy(n);return request_error("cannot create NES controller witness");
     }
+    if(execution_witness_path && !write_nes_execution_witness(execution_witness_path,n,&execution_filter,state.cpu_cycles,digest,&execution_count,&execution_dropped)) {
+        nes_destroy(n);free(series.data);return request_error("cannot create NES execution witness");
+    }
     if(series.path) {
         series.written=write_new_file(series.path,"",0,series.data,(DWORD)series.used);
         if(!series.written) {nes_destroy(n);free(series.data);return request_error("cannot create or write frame series");}
@@ -1906,6 +1971,7 @@ static int run_nes(int argc, wchar_t **argv)
            cartridge.battery_flag?"true":"false",cartridge.header_region==1?"pal":cartridge.header_region==2?"multi":"ntsc",cartridge.pal?"pal":"ntsc",region?"true":"false");
     if(state.fault) printf(",\"fault\":{\"operation\":\"%s\",\"address\":%u,\"opcode\":%u}",state.fault,(unsigned)state.fault_address,(unsigned)state.fault_opcode);
     if(controller_witness_path) printf(",\"controller_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"limit\":8192}",witness_count,witness_dropped);
+    if(execution_witness_path) printf(",\"nes_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"limit\":%u,\"range_reached\":%s}",execution_count,execution_dropped,execution_filter.limit,state.cpu_cycles>=execution_filter.cycle_last?"true":"false");
     if(until_cycle_set || until_frame_set || until_ready_cycle_set) {
         const char *kind=until_cycle_set?"cycle":until_frame_set?"frame":"cycles_after_readiness";
         uint32_t requested=until_cycle_set?until_cycle:until_frame_set?until_frame:until_ready_cycle;
@@ -2051,6 +2117,8 @@ int wmain(int argc, wchar_t **argv)
              "  [--controller-event STEP:MASK | --controller-cycle CYCLE:MASK] (also --controller2-event / --controller2-cycle)\n"
              "  [--input-after ADDRESS:WIDTH:VALUE] [--until-cycle CYCLE | --until-frame FRAME | --until-input-cycle OFFSET | --until-pc ADDRESS]\n"
              "  [--observe-cycle CYCLE:ADDRESS:LENGTH] [--controller-timing 1] [--controller-witness PATH] [--controller-witness-cycles FIRST:LAST]\n"
+             "  [--nes-witness PATH] [--nes-witness-exec ADDRESS:LENGTH] [--nes-witness-read ADDRESS:LENGTH] [--nes-witness-write ADDRESS:LENGTH]\n"
+             "  [--nes-witness-cycles FIRST:LAST] [--nes-witness-limit N]\n"
              "  [--inspect ADDRESS:LENGTH] [--inspect-ppu ADDRESS:LENGTH] [--inspect-oam ADDRESS:LENGTH] [--frame PATH] [--audio PATH] [--video PATH]\n"
              "Capture series: --capture-series PATH (--capture-cycle CYCLE | NES --capture-frame N | Mac --capture-vbl N) [--capture-memory ADDRESS:LENGTH]\n"
              "  NES also supports --capture-ppu ADDRESS:LENGTH and --capture-oam OFFSET:LENGTH; up to 32 points.\n"
@@ -2065,7 +2133,8 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-phase CYCLE:X:Y --key CYCLE:CODE:STATE\n"
              "  --window-mouse CYCLE:X:Y:ACTION (0 move, 1 press, 2 held move, 3 release)\n"
              "  --live SCALE --mouse-record PATH --mouse-replay PATH --mouse-witness PATH\n"
-             "  --keyboard-witness PATH [--keyboard-witness-range FIRST:LAST]\n"
+             "  --keyboard-witness PATH [--keyboard-witness-range FIRST:LAST] [--keyboard-witness-limit N]\n"
+             "  --keyboard-fault COMMAND:OCCURRENCE:KIND:ARG (kind 1 stall, 2 no reply, 3 delay, 4 malformed, 5 disconnect)\n"
              "  --display-witness PATH [--display-witness-range FIRST:LAST] [--display-witness-memory ADDRESS:LENGTH]\n"
              "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-witness-memory ADDRESS:LENGTH\n"
              "  --mouse-edge-cycles N --mouse-vbl-guard N\n"
@@ -2105,6 +2174,12 @@ int wmain(int argc, wchar_t **argv)
     if(error==NULL && request.keyboard_witness_path &&
        !mac128k_start_keyboard_witness(machine.mac,request.keyboard_witness_first,request.keyboard_witness_last))
         error="cannot initialize keyboard witness";
+    if(error==NULL && request.keyboard_witness_path && !mac128k_keyboard_witness_limit(machine.mac,request.keyboard_witness_limit))
+        error="cannot configure keyboard witness limit";
+    if(error==NULL && request.keyboard_fault_set &&
+       !mac128k_keyboard_fault(machine.mac,(uint8_t)request.keyboard_fault[0],request.keyboard_fault[1],
+                               (uint8_t)request.keyboard_fault[2],request.keyboard_fault[3]))
+        error="cannot configure keyboard fault";
     if(error==NULL && request.display_witness_path &&
        !mac128k_start_display_witness(machine.mac,request.display_witness_first,request.display_witness_last,
                                      request.display_witness_memory.address,request.display_witness_memory.length))
@@ -2208,6 +2283,7 @@ int wmain(int argc, wchar_t **argv)
     }
     struct keyboard_summary keyboard={0};
     if(request.keyboard_witness_path) {
+        keyboard.limit=request.keyboard_witness_limit;keyboard.range_reached=state.cycles>=request.keyboard_witness_last;
         for(size_t i=0;i<request.input_event_count;i++) if(request.input_events[i].kind==INPUT_MAC_KEY) {
             ++keyboard.scheduled;if(i<mouse.scheduled_accepted) ++keyboard.accepted;
         }
@@ -2217,13 +2293,19 @@ int wmain(int argc, wchar_t **argv)
     struct display_summary display={0};
     if(request.display_witness_path && !write_display_witness(machine.mac,&request,state.cycles,&display))
         result=(struct run_result){"error","cannot create or write display witness",2};
+    struct keyboard_fault_result keyboard_fault={0};
+    if(request.keyboard_fault_set) {
+        keyboard_fault.command=request.keyboard_fault[0];keyboard_fault.occurrence=request.keyboard_fault[1];
+        keyboard_fault.kind=request.keyboard_fault[2];keyboard_fault.argument=request.keyboard_fault[3];
+        keyboard_fault.triggered=mac128k_keyboard_fault_status(machine.mac,&keyboard_fault.cycle);
+    }
     if(request.series.path) {
         request.series.written=write_new_file(request.series.path,"",0,request.series.data,(DWORD)request.series.used);
         if(!request.series.written) result=(struct run_result){"error","cannot create or write frame series",2};
     }
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
-                 request.display_witness_path?&display:NULL);
+                 request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL);
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);
