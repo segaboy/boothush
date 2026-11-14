@@ -71,6 +71,15 @@ The same focused integration passed against the new `7121c504...` ROM; its
 fixture and independent port results are in
 `C:/Repos/.task-temp/nstb-damage-cap-title-20261114-a`.
 
+The focused test also repeats title input at 1,024 and 256 modeled cycles per
+mouse edge, verifying repeatable guest results and that all 64 modeled phase
+steps are scheduled and consumed. The 1,024-cycle case must reach X=288; the
+256-cycle result is characterized without requiring the current loss to remain.
+Both integration tests pass for all three pinned ROMs using executable
+`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`,
+and skip without the optional fixture. This is a model/guest integration
+regression, not evidence of physical mouse speed or completeness.
+
 ## Deterministic injected keyboard faults
 
 `--keyboard-fault COMMAND:OCCURRENCE:KIND:ARG` selects one outgoing command byte and its positive, one-based matching occurrence. The one-shot fault is opt-in and may be used with scheduled keyboard and mouse input. The JSON `keyboard_fault` object reports the selection, whether it triggered, and its modeled cycle. A fault that has not triggered by the stop is not evidence of guest recovery. Kind and argument are:

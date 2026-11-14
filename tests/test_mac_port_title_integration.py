@@ -10,6 +10,32 @@ import unittest
 
 @unittest.skipUnless(os.environ.get('BOOTHUSH_STB_TITLE_ROM'), 'port title ROM not supplied')
 class MacPortTitleIntegration(unittest.TestCase):
+    def test_mouse_rate_characterization_is_repeatable(self):
+        rom=Path(os.environ['BOOTHUSH_STB_TITLE_ROM']).resolve(strict=True)
+        exe=Path(os.environ['BOOTHUSH_EXE']).resolve(strict=True)
+        digest=hashlib.sha256(rom.read_bytes()).hexdigest()
+        self.assertIn(digest,('d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e',
+                              '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e',
+                              '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd'))
+        for spacing in (1024,256):
+            cmd=[str(exe),'--machine','mac128k','--rom',str(rom),'--cycles','4000000',
+                 '--timeout-ms','20000','--mouse-dcd-invert','3','--mouse-edge-cycles',str(spacing),
+                 '--mouse-motion','1000000:32:0','--inspect','0xb00:80']
+            def run():
+                p=subprocess.run(cmd,capture_output=True,text=True,timeout=25,
+                                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.assertEqual(p.returncode,0,(p.stdout,p.stderr))
+                return json.loads(p.stdout)
+            data=run();self.assertEqual(data,run())
+            self.assertEqual(data['status'],'cycle_limit')
+            self.assertEqual((data['mouse']['samples'],data['mouse']['steps'],data['mouse']['pending']),(1,64,0))
+            memory=bytes.fromhex(data['memory']['bytes'])
+            self.assertEqual(memory[73],1)
+            x=int.from_bytes(memory[64:66],'big')
+            self.assertLessEqual(x,506)
+            if spacing==1024:self.assertEqual(x,288)
+            # 256 is a characterization, not a requirement that loss persists.
+
     def test_mouse_start_keyboard_play_and_repeatable_capture(self):
         rom=Path(os.environ['BOOTHUSH_STB_TITLE_ROM']).resolve(strict=True)
         exe=Path(os.environ['BOOTHUSH_EXE']).resolve(strict=True)
