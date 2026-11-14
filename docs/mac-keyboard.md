@@ -70,6 +70,10 @@ inputs do not establish real hardware or human behavior.
 The same focused integration passed against the new `7121c504...` ROM; its
 fixture and independent port results are in
 `C:/Repos/.task-temp/nstb-damage-cap-title-20261114-a`.
+It also passed with the opt-in native-C movement title ROM SHA-256
+`71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974`;
+its build and live-movement mutation are recorded in
+`C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`.
 
 ## Optional port native-C fixture
 
@@ -98,7 +102,7 @@ The focused test also repeats title input at 1,024 and 256 modeled cycles per
 mouse edge, verifying repeatable guest results and that all 64 modeled phase
 steps are scheduled and consumed. The 1,024-cycle case must reach X=288; the
 256-cycle result is characterized without requiring the current loss to remain.
-Both integration tests pass for all three pinned ROMs using executable
+Both integration tests pass for all four pinned ROMs using executable
 `5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`,
 and skip without the optional fixture. This is a model/guest integration
 regression, not evidence of physical mouse speed or completeness.

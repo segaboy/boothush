@@ -16,7 +16,8 @@ class MacPortTitleIntegration(unittest.TestCase):
         digest=hashlib.sha256(rom.read_bytes()).hexdigest()
         self.assertIn(digest,('d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e',
                               '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e',
-                              '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd'))
+                              '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd',
+                              '71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974'))
         for spacing in (1024,256):
             cmd=[str(exe),'--machine','mac128k','--rom',str(rom),'--cycles','4000000',
                  '--timeout-ms','20000','--mouse-dcd-invert','3','--mouse-edge-cycles',str(spacing),
@@ -41,7 +42,8 @@ class MacPortTitleIntegration(unittest.TestCase):
         exe=Path(os.environ['BOOTHUSH_EXE']).resolve(strict=True)
         admitted=('d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e',
                   '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e',
-                  '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd')
+                  '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd',
+                  '71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974')
         digest=hashlib.sha256(rom.read_bytes()).hexdigest()
         self.assertIn(digest,admitted)
         exe_hash=hashlib.sha256(exe.read_bytes()).hexdigest()
