@@ -85,6 +85,15 @@ the port's source, toolchain, commands and limits are in
 `C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`. This is a
 bounded software fixture, not a physical Mac or full-game test.
 
+The subsequent two-direction component fixture is separately enabled by
+`BOOTHUSH_STB_NATIVE_COMPONENT_ROM`, pinned to SHA-256
+`4f60b4f9500318f56a6f8c23331f7bd61062bc67f6e651d24ee596eef7ac429a`.
+The same test module checks its twenty expected position/velocity pairs,
+repeatability, and an acceleration mutation. Both fixtures passed with the
+executable above; each independently skips when its ROM is absent. The port
+records the source and build inputs in its Windows-native C evidence. This
+checks execution in the model, not physical behavior or a playable game.
+
 The focused test also repeats title input at 1,024 and 256 modeled cycles per
 mouse edge, verifying repeatable guest results and that all 64 modeled phase
 steps are scheduled and consumed. The 1,024-cycle case must reach X=288; the
