@@ -51,14 +51,14 @@ enum { SERIES_MAX_POINTS=32, SERIES_MAX_MEMORY=256 };
 struct series_sample {
     uint64_t target,cycle,frame,step,offset;
     uint32_t size;
-    size_t inputs;
+    size_t inputs,replay_samples;
     bool image_available;
     uint8_t memory[SERIES_MAX_MEMORY],ppu[SERIES_MAX_MEMORY],oam[SERIES_MAX_MEMORY];
 };
 struct frame_series {
     const wchar_t *path;
     unsigned mode; /* 1: cycles, 2: NES completed frames or Mac VBLs */
-    bool relative,written;
+    bool relative,written,replay;
     uint32_t points[SERIES_MAX_POINTS];
     size_t count,completed;
     struct inspection memory,ppu,oam;
@@ -610,7 +610,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if((request->series.path!=NULL)!=(request->series.count!=0) ||
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
     if(request->series.path && request->machine!=MACHINE_MAC128K) return "capture-series is supported on mac128k and nes";
-    if(request->series.path && (request->live_scale || request->mouse_replay_path)) return "capture-series requires scheduled, not live or replay, input";
+    if(request->series.path && request->live_scale) return "capture-series does not support live input";
+    request->series.replay=request->mouse_replay_path!=NULL;
     if(request->series.memory.length && (request->series.memory.address>=MAC128K_RAM_SIZE ||
        request->series.memory.length>MAC128K_RAM_SIZE-request->series.memory.address)) return "capture-memory must stay in Mac RAM";
     if(request->keyboard_witness_range_set && !request->keyboard_witness_path) return "keyboard witness range requires keyboard witness";
@@ -849,6 +850,7 @@ static void print_series(const struct frame_series *s,bool is_nes)
                    v->target,v->cycle,v->frame);
             if(is_nes) printf(",\"step\":%" PRIu64,v->step);
             printf(",\"inputs_accepted_before\":%zu,\"image_available\":%s",v->inputs,v->image_available?"true":"false");
+            if(s->replay) printf(",\"replay_samples_queued_before\":%zu",v->replay_samples);
             if(v->image_available) printf(",\"offset\":%" PRIu64 ",\"length\":%u",v->offset,v->size);
             if(s->memory.length) {printf(",\"memory\":{\"address\":%u,\"bytes\":\"",s->memory.address);series_hex(v->memory,s->memory.length);fputs("\"}",stdout);}
             if(s->ppu.length) {printf(",\"ppu\":{\"address\":%u,\"bytes\":\"",s->ppu.address);series_hex(v->ppu,s->ppu.length);fputs("\"}",stdout);}
@@ -1412,6 +1414,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             if((series->mode==1?state.cycles:state.vbl)<target) break;
             struct series_sample *sample=series_capture(series,target,state.cycles,state.vbl,0,mouse->scheduled_accepted,
                                                        "P4\n512 342\n",mac128k_frame(machine->mac),MAC128K_FRAME_SIZE);
+            sample->replay_samples=mouse->replay_index;
             if(series->memory.length && !read_ram(machine,series->memory.address,sample->memory,series->memory.length))
                 return (struct run_result){"error","cannot read series memory",2};
         }

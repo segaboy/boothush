@@ -8,9 +8,46 @@ import unittest
 
 from test_boot import BootHushTestCase, make_rom
 from test_pc286 import make_rom as make_pc_rom
+from test_mouse_cli import make_mouse_probe_rom, VALID_TRACE
 
 
 class VideoCaptureTests(BootHushTestCase):
+    def test_mouse_replay_frame_series_is_noninvasive(self):
+        self.rom.write_bytes(make_mouse_probe_rom())
+        trace = self.scratch / 'mouse.bhmouse'
+        trace.write_bytes(VALID_TRACE)
+        before = trace.read_bytes()
+        plain = self.boot('--mouse-replay', trace, '--inspect', '0xb00:8', cycles=500000)
+        def capture(path):
+            return self.boot('--mouse-replay', trace, '--inspect', '0xb00:8',
+                             '--capture-series', path, '--capture-memory', '0xb00:8',
+                             '--capture-cycle', '130240', '--capture-cycle', '150000',
+                             '--capture-cycle', '470000', '--capture-cycle', '480000',
+                             cycles=500000)
+        one = self.scratch / 'one.pbm'; two = self.scratch / 'two.pbm'
+        first = capture(one); second = capture(two)
+        self.assertEqual(first, second)
+        self.assertEqual(one.read_bytes(), two.read_bytes())
+        series = first.pop('frame_series'); first.pop('series_inputs')
+        self.assertEqual(first, plain)
+        self.assertEqual((series['processed'], series['pending']), (3, 1))
+        samples = series['samples']
+        self.assertEqual(samples[0]['replay_samples_queued_before'], 0)
+        self.assertEqual(samples[1]['replay_samples_queued_before'], 3)
+        self.assertEqual(samples[2]['replay_samples_queued_before'], 3)
+        self.assertEqual(samples[1]['inputs_accepted_before'], 0)
+        self.assertEqual(trace.read_bytes(), before)
+        unchanged = one.read_bytes()
+        self.boot('--mouse-replay', trace, '--capture-series', one,
+                  '--capture-cycle', '1', cycles=500000, exit_code=2)
+        self.assertEqual(one.read_bytes(), unchanged)
+        vbl = self.boot('--mouse-replay', trace, '--capture-series', self.scratch / 'vbl-replay.pbm',
+                        '--capture-vbl', '1', '--capture-vbl', '2', cycles=500000)
+        self.assertEqual([s['frame'] for s in vbl['frame_series']['samples']], [1, 2])
+        self.boot('--mouse-replay', trace, '--input-after', '0xb00:4:0x1234abcd',
+                  '--capture-series', self.scratch / 'invalid.pbm', '--capture-cycle', '1',
+                  cycles=500000, exit_code=2)
+
     def test_mac_display_witness_vbl_framebuffer_and_fault(self):
         trace=self.scratch/'display.txt';series=self.scratch/'display.pbm'
         plain=self.boot(cycles=280000)
