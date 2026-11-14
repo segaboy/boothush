@@ -171,6 +171,7 @@ struct mouse_session {
     uint64_t ready_cycle;
     size_t scheduled;
     size_t scheduled_accepted;
+    bool scheduled_rejected;
     uint64_t event_cycles[MAX_INPUT_EVENTS];
     uint8_t source;
     uint32_t edge_cycles, guard_cycles;
@@ -1205,6 +1206,12 @@ static void print_result(const char *status, enum machine_kind machine,
         if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
         printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
     }
+    if (machine == MACHINE_PC286 && mouse != NULL && mouse->scheduled != 0) {
+        const size_t rejected = mouse->scheduled_rejected ? 1u : 0u;
+        printf(",\"pc_keyboard_input\":{\"scheduled\":%zu,\"accepted\":%zu,\"rejected\":%zu,\"pending\":%zu}",
+               mouse->scheduled, mouse->scheduled_accepted, rejected,
+               mouse->scheduled - mouse->scheduled_accepted - rejected);
+    }
     if(keyboard) printf(",\"keyboard_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"rejected\":%" PRIu64 ",\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu,\"limit\":%u,\"range_reached\":%s}",
                         keyboard->count,keyboard->dropped,keyboard->rejected,keyboard->scheduled,keyboard->accepted,keyboard->scheduled-keyboard->accepted,keyboard->limit,keyboard->range_reached?"true":"false");
     if(display) printf(",\"display_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"limit\":8192}",display->count,display->dropped);
@@ -1475,6 +1482,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                     (uint64_t)event.cycle + mouse->ready_cycle, event.action);
             }
             if (!apply_input(machine, mouse, event, state.cycles)) {
+                if (machine->pc != NULL && event.kind == INPUT_PC_SCAN) mouse->scheduled_rejected = true;
                 if (event.kind == INPUT_WINDOW) {
                     return (struct run_result){"input_error", "window mouse event rejected or input queue full", 1};
                 }

@@ -45,6 +45,15 @@ For deterministic loader error testing, `--fail-floppy-read C:H:S` requires the 
 
 The machine has RAM at `00000h`–`9ffffh`, EGA aperture in `a0000h`–`bffffh`, optional EGA ROM at `c0000h`, system ROM at `f0000h` and the reset ROM alias at `ff0000h` in the 24-bit space. `--scancode CYCLE:BYTE` schedules raw keyboard set-2 bytes at guest CPU boundaries, including `f0` followed by the key byte for release; it does not touch the host keyboard. The built-in keyboard shim handles a limited set of translated keys, not an entire BIOS keyboard implementation. See [EGA diagnostics](ega.md) for graphics and caller-supplied text-font limitations.
 
+When at least one scancode is scheduled, the result JSON includes
+`pc_keyboard_input` with `scheduled`, `accepted`, `rejected`, and `pending`
+counts. Accepted means the keyboard model accepted the scheduled byte or
+translation prefix; it does not prove the guest read or acted on it. The first
+rejected byte stops the run as `machine_fault`; later events remain pending.
+The stop condition is checked before input at a boundary, so an early stop may
+leave pending events. No field is emitted if no scancodes were scheduled.
+This accounting describes injection into the model, not physical input.
+
 The `--hard-disk` input is loaded into a private memory copy. Guest fixed-disk writes affect that copy, not the input file. `--disk-out NEW_PATH` writes the copy only if the run succeeds and the output path does not exist. Supply that new file as `--hard-disk` on the next run to test persistence. Failure, timeout, cancellation or an unmet condition does not save the disk copy. A snapshot or a successful boot of an original fixture is not a ClasSICK installation. Keep input disks and generated outputs outside Git.
 
 With a fixed emulator build, ROM, media, cycle-scheduled input and stop condition, guest output can be compared between runs; a wall-clock timeout, changed build or external host input can change the outcome. The bounded 286 witness records steps, filtered byte memory and port events, IRQ acknowledgements and changes to the last exception; it can drop rows after 65,536 events, and firmware-shim operations are not independently traced. See the [README witness contract](../README.md#local-process-api).

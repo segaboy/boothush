@@ -109,6 +109,11 @@ Use one stop condition at most. Numbers accept decimal or `0x` hex. The runner c
 
 The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. PC adds `cs`, `ip`, `halted`, and the last POST byte and exception vector when available. Optional `memory` contains the physical address and hexadecimal bytes. A bus fault reports its operation and address.
 
+PC runs with scheduled scancodes also report `pc_keyboard_input` counts for
+scheduled, accepted, rejected and pending bytes. Acceptance is into the model,
+not evidence of guest consumption. See the [PC/AT guide](docs/pc-at.md) for
+rejection and early-stop behavior.
+
 `--convert-capture INPUT --output OUTPUT` converts a headless capture to GIF, MP4 or PNG using the FFmpeg bundled next to the executable. See [headless capture](docs/headless-capture.md) for bundle assembly and exact examples.
 
 When video is requested, `video` in the result reports frame count, dimensions, sampling rate, actual last sampled cycle and whether a frame was omitted after the limit. The [capture guide](docs/headless-capture.md) explains timing and output size.

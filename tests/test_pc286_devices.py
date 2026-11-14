@@ -61,6 +61,34 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(len(process.stdout.splitlines()), 1)
         return json.loads(process.stdout)
 
+    def test_keyboard_schedule_accounting(self):
+        # These counts describe delivery to the model, not guest consumption.
+        image = self.write('idle.img', boot_image(bytes.fromhex('faebfe'), 1228800))
+        result = self.run_guest('--floppy', image, '--scancode', '1000:0x74',
+                                '--scancode', '2000:0xf0', cycles=4000)
+        self.assertEqual(result['status'], 'cycle_limit')
+        self.assertEqual(result['pc_keyboard_input'],
+                         {'scheduled': 2, 'accepted': 2, 'rejected': 0, 'pending': 0})
+
+        # The stop predicate is checked before future scheduled input.
+        image = self.write('early.img', boot_image(bytes.fromhex('b0aae680faebfe'), 1228800))
+        result = self.run_guest('--floppy', image, '--until-post', '0xaa',
+                                '--scancode', '1000:0x74', '--scancode', '2000:0x74', cycles=4000)
+        self.assertEqual(result['status'], 'condition_met')
+        self.assertEqual(result['pc_keyboard_input'],
+                         {'scheduled': 2, 'accepted': 0, 'rejected': 0, 'pending': 2})
+
+        # The first byte beyond model queue capacity is rejected; subsequent
+        # scheduled bytes are still pending when the run stops on the error.
+        image = self.write('overflow.img', boot_image(bytes.fromhex('faebfe'), 1228800))
+        args = ['--floppy', image]
+        for index in range(34):
+            args += ['--scancode', f'{1000 + index * 20}:0x74']
+        result = self.run_guest(*args, cycles=4000, exit_code=1)
+        self.assertEqual(result['status'], 'machine_fault')
+        self.assertEqual(result['pc_keyboard_input'],
+                         {'scheduled': 34, 'accepted': 32, 'rejected': 1, 'pending': 1})
+
     def test_disk_boot_chs_writes_and_snapshot(self):
         program = checked_program((
             ("80fa80", 0x75),  # cmp dl,80h; BIOS boot drive

@@ -86,6 +86,13 @@ The [Mac mouse runbook](classick-097-mouse.md) includes a complete background se
 
 ## Trace 286 execution
 
+For scheduled 286 keyboard input, inspect `pc_keyboard_input` in the process
+JSON. Its accepted count is model admission, while rejected and pending events
+identify input that was not admitted before stop; guest state and output still
+need separate checks. The source-matched ClasSICK shared-session runner now
+checks these counts alongside its guest-state and full-pixel assertions. The
+field's exact behavior and stop-boundary rule are in the [PC/AT guide](pc-at.md).
+
 The built-in 286 firmware can deliberately fail a selected floppy read using `--fail-floppy-read C:H:S`. The two-track diagnostic loader begins its payload reads at `0:0:2` and `0:1:1`; choosing either exercises its error branch, while JSON records the number of injections. The [PC/AT guide](pc-at.md) defines status, matching, and limitations. This is a test facility, not a failure of ordinary disk reads.
 
 The optional witness records CPU steps and hardware interrupt acknowledgements. Supply memory and port filters to include bus accesses, and use a cycle range to limit volume. The file header reports the stop cycle, saved event count and dropped event count. At most 65,536 events are retained. See the [README witness description](../README.md#local-process-api) for timing granularity and exception limitations.
