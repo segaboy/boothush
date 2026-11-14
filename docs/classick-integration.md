@@ -12,6 +12,10 @@ Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each 
 
 The owner's 2026-11-14 direction makes native Mac128K and PC/AT 286 the next paired-release targets; x64 work is paused. The [original EGA/keyboard diagnostic](pc286-pair-probe-20261114.md) checks a centered 512x342 canvas and two directional cursor moves with scheduled keys. It does not run ClasSICK or establish a window, parity, human input or physical-hardware behavior. See the [PC/AT profile](pc-at.md) for exact firmware and keyboard limitations.
 
+A separate [keyboard-controlled frame experiment](pc286-keyboard-drag-20261114.md) checks an original rectangular frame through a toggled press, move, release and ignored post-release movement. It tests this modeled device path with synthetic input, not ClasSICK window behavior or physical dragging.
+
+The [Mac-sized bitmap comparison](mac-pc286-bitmap-20261114.md) loads a caller-supplied original PBM into an original 286 test guest and compares all EGA canvas and margin pixels. It is useful for cross-project display experiments, but does not run a ClasSICK renderer or establish behavioral parity.
+
 ## Preserved x86-64 status
 
 BootHush does not yet boot the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. The experimental software probe can interpret a limited number of actual EFI instructions without a hypervisor, but does not provide a UEFI context or boot. See [x64 enablement](classick-x64.md) for commands, results, and remaining work.
