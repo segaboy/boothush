@@ -18,6 +18,16 @@ The [Mac-sized bitmap comparison](mac-pc286-bitmap-20261114.md) loads a caller-s
 
 Not Super Tilt Bro's experimental mouse-title-to-keyboard-play ROM is another headless Mac integration consumer. Its canonical receipt is `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`: it records the exact ROM and executable hashes, bounded input schedules, keyboard-fault retry, guest observations and a controlled comparison of mouse-edge intervals. In that particular guest/model combination, delivery of all scheduled transitions did not guarantee that the guest tracked them accurately. Set `BOOTHUSH_STB_TITLE_ROM` to the specifically pinned caller-supplied ROM to opt into the repeatable [integration test](mac-keyboard.md#optional-port-title-integration); it skips if unset. The port's game-informed implementation is not admitted as a ClasSICK input, and the result neither diagnoses a BootHush defect nor qualifies physical hardware or human input.
 
+The current source-matched Windows-built ClasSICK Mac ROM and 286 diagnostic
+also match at eight scripted state and pixel checkpoints in BootHush, with a
+replayed Mac trace. Faster modeled mouse input still fails; the ready-checked
+four-direction investigation and exact identities are in
+[the mouse witness guide](mac-mouse-witness.md#windows-native-classick-candidate)
+and `C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
+The port separately exercises a Windows-compiled native-C movement fixture;
+its [optional integration](mac-keyboard.md#optional-port-native-c-fixture)
+is not game completion or ClasSICK implementation input.
+
 ## Preserved x86-64 status
 
 BootHush does not yet boot the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. The experimental software probe can interpret a limited number of actual EFI instructions without a hypervisor, but does not provide a UEFI context or boot. See [x64 enablement](classick-x64.md) for commands, results, and remaining work.

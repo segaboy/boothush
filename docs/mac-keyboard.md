@@ -71,6 +71,20 @@ The same focused integration passed against the new `7121c504...` ROM; its
 fixture and independent port results are in
 `C:/Repos/.task-temp/nstb-damage-cap-title-20261114-a`.
 
+## Optional port native-C fixture
+
+`tests/test_mac_port_native_c_integration.py` independently exercises the
+port's separately generated native 68000 C movement diagnostic. Set
+`BOOTHUSH_STB_NATIVE_C_ROM` to the exact fixture SHA-256
+`97f44775d70f8fa83191018b8fc4faa19e5b6a4d9a18f1e866ffac36b3717110`
+and `BOOTHUSH_EXE` to the executable. The test checks repeated guest results,
+ten expected movement states, and a deliberately mutated acceleration. It
+skips without the optional ROM. It passed with executable SHA-256
+`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`;
+the port's source, toolchain, commands and limits are in
+`C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`. This is a
+bounded software fixture, not a physical Mac or full-game test.
+
 The focused test also repeats title input at 1,024 and 256 modeled cycles per
 mouse edge, verifying repeatable guest results and that all 64 modeled phase
 steps are scheduled and consumed. The 1,024-cycle case must reach X=288; the

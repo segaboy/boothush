@@ -79,3 +79,28 @@ Every V3 row adds `ram_offset width captured_offset captured_width captured_valu
 With the separately supplied ClasSICK keyboard candidate ROM SHA-256 `b3a50ad806b589fdc02a4de579e6d72700c9107fb273d9ca73026320bebed807` and BootHush executable SHA-256 `617c749601dd2866fcfe5a0b1fce81ae7984e150e62d5282fa87b4a8d22e6062`, an input of 32 pixels at cycle 60000000 was tested in each of four directions with DCD inversion 3 and VBL guard 4096. At 2048 modeled cycles per edge, all four ended one pixel in the opposite direction with 29 guest-reported omissions. At 4096 all four reached the expected endpoint with zero omissions. An additional sweep produced failures in all four directions at 2560, and expected endpoints with zero omissions at 3072 and 3584. At 8192 with guard zero, the positive-X case ended one pixel short and reported two omissions. These outcomes are for that guest and modeled scenario, not a safe physical-mouse timing envelope.
 
 `scripts/probe_classick_mouse.py --emulator EXE --rom ROM --output NEW_DIRECTORY` reproduces paired traced and untraced cases for the 2048, 4096, and guard-zero scenarios, retaining frames, traces and a report. All nine pairs matched in complete guest JSON and framebuffer in the recorded run; the selected witness range was reached without drops. In one +X 2048 trace, the SCC latch was pending at cycle 60006190, an interrupt was accepted at 60008188, and the phase changed at 60008336 while the latch remained pending. This establishes the modeled event order, not whether guest code, the emulator model, or their interaction caused the missed motion. No hardware behavior or fix has been established.
+
+## Windows-native ClasSICK candidate
+
+The same probe accepts the new Windows-built original ROM SHA-256
+`6b622b2b163b86acdd3de54d1f656082ac55874830ebc1d58c204d06f36ef65a`.
+It first checks the guest's own `CS09` ready stage and fault word in a separate
+cold run before scheduling input; `--input-cycle` can choose an explicit
+bounded cycle. The initial attempt at 60,000,000 cycles was invalid for this
+ROM: a separate check showed stage 4. The revised preflight rejects that early
+schedule, and the nine-case run uses cycle 100,000,000 after observing stage 16
+at 99,990,006 with fault zero. The earlier invalid output remains in
+`C:/Repos/.task-temp/boothush-windows-mac-mouse-20261114-a`.
+
+With executable SHA-256
+`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`,
+all nine traced/untraced pairs matched in complete output and frame, with no
+witness drops. At 2,048 cycles per edge the four directions each reported 24
+omissions and moved four pixels opposite the requested direction; at 4,096 all
+four reached the intended 32-pixel endpoint with zero omissions. The 8,192
+guard-zero positive-X case also reached its endpoint. Commands, trace/frame
+hashes and the readiness result are in
+`C:/Repos/.task-temp/boothush-windows-mac-mouse-20261114-c/report.json`.
+One intermediate run was made while the probe source was changing and is not
+the cited source-identity result. This is a bounded model observation, not a
+physical rate, human-input result, sole-cause diagnosis or release qualification.
