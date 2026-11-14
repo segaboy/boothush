@@ -142,6 +142,36 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(missing['status'],'error')
         self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),original)
 
+    def test_selected_hard_disk_write_failure(self):
+        program = bytearray.fromhex('31c0 8ec0 bb007d b80103 b90200 ba8000 cd13 72 00')
+        branch = len(program)-1
+        program += bytes.fromhex('b042 e680 fa f4')
+        failure = len(program)
+        program += bytes.fromhex('a30005 9c58 a30205 b0e1 e680 fa f4')
+        program[branch] = failure-branch-1
+        image = boot_image(program,HARD_DISK_SIZE);image[0x100:0x104]=b'BHAT'
+        disk = self.write('write-disk.img',image)
+        before = hashlib.sha256(disk.read_bytes()).hexdigest()
+        failed_snapshot = self.directory/'failed-write.img'
+        result = self.run_guest('--hard-disk',disk,'--disk-out',failed_snapshot,
+                                '--fail-hard-disk-write','0:0:2','--fail-hard-disk-read','614:3:17',
+                                '--until-post','0xe1',
+                                '--inspect','0x500:4')
+        fault = result['hard_disk_write_failure']
+        self.assertEqual((fault['cylinder'],fault['head'],fault['sector'],fault['injected'],fault['bios_status']),
+                         (0,0,2,1,32))
+        self.assertEqual(result['hard_disk_read_failure']['injected'],0)
+        registers = bytes.fromhex(result['memory']['bytes'])
+        self.assertEqual(registers[:2],b'\x00\x20')
+        self.assertTrue(registers[2]&1)
+        self.assertEqual(hashlib.sha256(failed_snapshot.read_bytes()).hexdigest(),before)
+        good_snapshot = self.directory/'successful-write.img'
+        result = self.run_guest('--hard-disk',disk,'--disk-out',good_snapshot,
+                                '--fail-hard-disk-write','614:3:17','--until-post','0x42')
+        self.assertEqual(result['hard_disk_write_failure']['injected'],0)
+        self.assertEqual(good_snapshot.read_bytes()[512:516],b'BHAT')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
+
     def test_disk_boot_chs_writes_and_snapshot(self):
         program = checked_program((
             ("80fa80", 0x75),  # cmp dl,80h; BIOS boot drive

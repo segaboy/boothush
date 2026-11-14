@@ -33,6 +33,29 @@ checkpoints. Exact media, commands and observations are in
 The result does not prove a physical BIOS, install path, human input or
 release qualification.
 
+## Write-failure follow-up
+
+The later `--fail-hard-disk-write` option injects an analogous failure into
+selected built-in firmware writes; see [PC/AT](pc-at.md) for its scope and
+snapshot semantics. A separate generated guest checked the returned carry and
+status, an unchanged failing-disk snapshot, and a successful unselected
+write. With executable SHA-256
+`370f7a12a31bed9908813686a0cbd6bb197065b5e5d3e443fc48ad843e69f28d`,
+25 PC286 tests and four optional port tests passed. The twin-build manifest,
+object hashes, commands and test logs are in
+`C:/Repos/.task-temp/boothush-pc-hard-fault-twins-20261114-c`.
+
+The ClasSICK team used the injector to test a fresh-disk diagnostic copy:
+failure of its write left the generated blank snapshot unchanged, while a
+failure of the later verification read left the completed write in place.
+The latter is explicitly not rollback. The guest also copied and read back
+the full diagnostic prefix, the saved disk matched the intended image, and a
+separate BootHush boot reached the diagnostic's initial state. Full evidence
+and limits are in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+This remains a destructive, disposable model experiment, not an installer for
+existing media or proof of physical behavior.
+
 Reproduce the partial twin build with a new directory:
 
 ```powershell

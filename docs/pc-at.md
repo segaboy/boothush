@@ -55,6 +55,16 @@ selection and injection count, including any matching bootstrap read. The
 original disk image stays unchanged; injection is disabled by default. This is
 a deterministic modeled failure, not a physical controller fault model.
 
+`--fail-hard-disk-write C:H:S` applies the same starting-CHS selection and
+geometry/firmware restrictions to valid `INT 13h AH=03h` fixed-disk writes.
+It returns carry set, `AH=20h`, `AL=0`, records the disk status, and makes no
+changes for that injected write. `hard_disk_write_failure` reports the
+selection and count. It does not affect reads, verification, floppy, direct
+controller I/O or custom firmware. Read and write injections can be selected
+independently. A later error does not roll back earlier successful writes; a
+requested `--disk-out` snapshot is saved when the overall run is successful,
+including when an expected failure POST satisfies the stop condition.
+
 The machine has RAM at `00000h`–`9ffffh`, EGA aperture in `a0000h`–`bffffh`, optional EGA ROM at `c0000h`, system ROM at `f0000h` and the reset ROM alias at `ff0000h` in the 24-bit space. `--scancode CYCLE:BYTE` schedules raw keyboard set-2 bytes at guest CPU boundaries, including `f0` followed by the key byte for release; it does not touch the host keyboard. The built-in keyboard shim handles a limited set of translated keys, not an entire BIOS keyboard implementation. See [EGA diagnostics](ega.md) for graphics and caller-supplied text-font limitations.
 
 When at least one scancode is scheduled, the result JSON includes

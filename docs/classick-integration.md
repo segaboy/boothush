@@ -100,6 +100,9 @@ in the built-in firmware. The newer ClasSICK whole-disk diagnostic has been
 checked at each of its actual linked payload reads; see
 [hard-disk fault evidence](pc286-hard-disk-fault-20261114.md). This remains a
 modeled fault, not a physical or production-loader qualification.
+The matching `--fail-hard-disk-write` option tests write refusal; the
+generated-disk copy experiment distinguishes a failed write from a failed
+read after a completed write, which does not roll back the disk.
 
 The optional witness records CPU steps and hardware interrupt acknowledgements. Supply memory and port filters to include bus accesses, and use a cycle range to limit volume. The file header reports the stop cycle, saved event count and dropped event count. At most 65,536 events are retained. See the [README witness description](../README.md#local-process-api) for timing granularity and exception limitations.
 
