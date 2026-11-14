@@ -26,6 +26,34 @@ The text header is `BHMACKEY1 FIRST LAST STOP COUNT DROPPED REJECTED`, followed 
 
 The model queues transitions, including overlapping holds and releases, but does not establish physical keyboard rollover, per-key electrical behavior or hardware timing. Synthetic integration tests cover overlapping holds/releases, queue capacity, range filtering, repeated traces, and cap reporting. The optional `BOOTHUSH_STB_MAC_PROBE` integration uses the independently generated port controls ROM with SHA-256 `31b2666be66ac7a02d576998cb9b46aec3a91245d16679877d593748fd581fc6`; it observes queued/delivered press and release replies and four VBL-indexed framebuffer snapshots, including an exact repeated run. This is not physical-Mac evidence or Super Tilt Bro game logic.
 
+## Optional port title integration
+
+`tests/test_mac_port_title_integration.py` adds a separate, optional black-box
+test of the port's mouse-title-to-keyboard-play ROM SHA-256
+`d84d0ab3a1c981c2cbfb1a8ec039c189f3f83500ae90672f19b16ddb976df54e`.
+The ROM is generated and retained by the port, not distributed in this
+repository. Set `BOOTHUSH_STB_TITLE_ROM` to that exact image and `BOOTHUSH_EXE`
+to the executable; otherwise the test skips if the fixture is not supplied.
+It checks a scheduled mouse movement and click, scheduled key press/release,
+title and gameplay state at three VBL captures, correct fixture and executable
+hashes, and byte-identical guest reports, keyboard witnesses and frames in a
+second run. It also verifies the ROM input remains unchanged. Both the guest
+and inputs are experimental; this is not a physical or human input test.
+
+```powershell
+$env:BOOTHUSH_EXE = 'C:\Repos\boothush\out\windows\boothush.exe'
+$env:BOOTHUSH_STB_TITLE_ROM = 'C:\Repos\Not-Super-Tilt-Bro\out\title-deferred-test-20261114-d\title.rom'
+python -B -m unittest discover -v -s tests -p test_mac_port_title_integration.py
+```
+
+With BootHush executable SHA-256
+`1f306c427d1a8c42b9d547b2b25a424e4b4e6a389a52ae5861d030e0fe43bc25`,
+the focused fixture test passed and skipped cleanly without the variable.
+The non-x64 CTest selection passed 13/13 targets; its Python discovery ran
+143 tests with 17 optional skips and included this fixture test. The skipped
+or paused x64 lane was not tested. The port's canonical reproduction and
+limitations are in `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`.
+
 ## Deterministic injected keyboard faults
 
 `--keyboard-fault COMMAND:OCCURRENCE:KIND:ARG` selects one outgoing command byte and its positive, one-based matching occurrence. The one-shot fault is opt-in and may be used with scheduled keyboard and mouse input. The JSON `keyboard_fault` object reports the selection, whether it triggered, and its modeled cycle. A fault that has not triggered by the stop is not evidence of guest recovery. Kind and argument are:
