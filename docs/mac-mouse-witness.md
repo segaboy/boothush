@@ -104,3 +104,10 @@ hashes and the readiness result are in
 One intermediate run was made while the probe source was changing and is not
 the cited source-identity result. This is a bounded model observation, not a
 physical rate, human-input result, sole-cause diagnosis or release qualification.
+
+The later ClasSICK paired runner compared guard values 0, 1,024, 2,048 and
+4,096 at 2,048 modeled cycles per edge; all failed its first movement
+checkpoint. At 4,096 cycles per edge with guard zero, its eight checkpoints
+and replay passed. Its exact sources, commands and results are in
+`C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
+These are guest/model results and do not make a physical timing claim.
