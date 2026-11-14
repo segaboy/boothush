@@ -74,6 +74,10 @@ It also passed with the opt-in native-C movement title ROM SHA-256
 `71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974`;
 its build and live-movement mutation are recorded in
 `C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`.
+The same integration passed for the opt-in two-player native-C title ROM
+SHA-256 `b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126`.
+The port's separate evidence covers its player-two velocity, key overlap and
+simultaneous-input scenarios; these remain modeled input, not physical tests.
 
 ## Optional port native-C fixture
 
@@ -102,9 +106,11 @@ The focused test also repeats title input at 1,024 and 256 modeled cycles per
 mouse edge, verifying repeatable guest results and that all 64 modeled phase
 steps are scheduled and consumed. The 1,024-cycle case must reach X=288; the
 256-cycle result is characterized without requiring the current loss to remain.
-Both integration tests pass for all four pinned ROMs using executable
-`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`,
-and skip without the optional fixture. This is a model/guest integration
+Both integration tests passed for the first four pinned ROMs using executable
+`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3` and
+for the two-player-C ROM using executable
+`62daf36a8d1e034667fbd73dd09a2a6134a6a0144ea56010d327b41fd110d9da`.
+They skip without the optional fixture. This is a model/guest integration
 regression, not evidence of physical mouse speed or completeness.
 
 ## Deterministic injected keyboard faults
