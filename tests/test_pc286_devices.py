@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -88,6 +89,58 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'machine_fault')
         self.assertEqual(result['pc_keyboard_input'],
                          {'scheduled': 34, 'accepted': 32, 'rejected': 1, 'pending': 1})
+
+    def test_selected_hard_disk_read_failure(self):
+        # Two independently addressed BIOS reads; retain first data if the
+        # second is rejected, and store the returned AX and FLAGS.
+        program = bytearray.fromhex('31c0 8ec0 bb0006 b80102 b90200 ba8000 cd13 72 00')
+        first_branch = len(program)-1
+        program += bytes.fromhex('bb0008 b80102 b90100 ba8001 cd13 72 00')
+        second_branch = len(program)-1
+        program += bytes.fromhex('b042 e680 fa f4')
+        first_failure = len(program)
+        program += bytes.fromhex('a30005 9c58 a30205 b0e1 e680 fa f4')
+        second_failure = len(program)
+        program += bytes.fromhex('a30005 9c58 a30205 b0e2 e680 fa f4')
+        program[first_branch] = first_failure-first_branch-1
+        program[second_branch] = second_failure-second_branch-1
+        image = boot_image(program, HARD_DISK_SIZE)
+        image[512:516] = b'BHAT'
+        image[17*512:17*512+4] = b'NEXT'
+        disk = self.write('failure-disk.img', image)
+        original = hashlib.sha256(disk.read_bytes()).hexdigest()
+        for selected,post,first in (('0:0:2',0xe1,b'\0\0\0\0'),('0:1:1',0xe2,b'BHAT')):
+            result = self.run_guest('--hard-disk', disk, '--fail-hard-disk-read', selected,
+                                    '--until-post', hex(post), '--inspect', '0x500:4',
+                                    '--inspect', '0x600:4', '--inspect', '0x800:4')
+            self.assertEqual(result['status'], 'condition_met')
+            fault = result['hard_disk_read_failure']
+            self.assertEqual((fault['injected'],fault['bios_status']),(1,32))
+            self.assertEqual([fault[x] for x in ('cylinder','head','sector')],
+                             [int(x) for x in selected.split(':')])
+            rows = [bytes.fromhex(row['bytes']) for row in result['memory_ranges']]
+            self.assertEqual(rows[0][:2], b'\x00\x20')
+            self.assertTrue(rows[0][2] & 1)
+            self.assertEqual(rows[1:], [first,b'\0\0\0\0'])
+        result = self.run_guest('--hard-disk', disk, '--fail-hard-disk-read', '614:3:17',
+                                '--until-post', '0x42')
+        self.assertEqual(result['hard_disk_read_failure']['cylinder'],614)
+        self.assertEqual(result['hard_disk_read_failure']['injected'],0)
+        # A different starting sector is not an injected read failure.
+        result = self.run_guest('--hard-disk', disk, '--fail-hard-disk-read', '0:0:3',
+                                '--until-post', '0x42')
+        self.assertEqual(result['hard_disk_read_failure']['injected'],0)
+        # A buffer crossing 64 KiB is rejected before the failure hook.
+        crossing = checked_program((('31c0 8ec0 bb00ff b80102 b90200 ba8000 cd13', 0x73),), 0x43)
+        crossing_disk = self.write('crossing.img', boot_image(crossing,HARD_DISK_SIZE))
+        result = self.run_guest('--hard-disk', crossing_disk, '--fail-hard-disk-read', '0:0:2',
+                                '--until-post', '0x43')
+        self.assertEqual(result['hard_disk_read_failure']['injected'],0)
+        invalid = self.run_guest('--hard-disk', disk, '--fail-hard-disk-read', '615:0:1', exit_code=2)
+        self.assertEqual(invalid['status'],'error')
+        missing = self.run_guest('--fail-hard-disk-read', '0:0:2', exit_code=2)
+        self.assertEqual(missing['status'],'error')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),original)
 
     def test_disk_boot_chs_writes_and_snapshot(self):
         program = checked_program((

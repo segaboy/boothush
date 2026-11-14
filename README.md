@@ -69,6 +69,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--rom PATH` | Read a 65,536-byte system ROM. PC mode maps it at the low and high BIOS ranges used during reset. |
 | `--floppy PATH` | Mount read-only media. Macintosh accepts a raw 409,600-byte image or 400 KiB Disk Copy 4.2. PC accepts a raw 1,228,800-byte image. PC built-in firmware checks the boot signature and loads the selected sector at `0000:7C00`. |
 | `--fail-floppy-read C:H:S` | PC built-in firmware test only: fail each valid floppy INT 13h read starting at the specified cylinder, head and sector. Requires `--floppy`, and cannot be used with `--rom`. Reports the selection and injection count in JSON. See [PC/AT](docs/pc-at.md). |
+| `--fail-hard-disk-read C:H:S` | PC built-in firmware test only: fail each valid hard-disk INT 13h read starting at the specified cylinder, head and sector. Requires `--hard-disk`, and cannot be used with `--rom`. Reports the selection and injection count in JSON. See [PC/AT](docs/pc-at.md). |
 | `--hard-disk PATH` | PC only. Mount a raw 21,411,840-byte IBM type 2 disk (615 cylinders, 4 heads, 17 sectors). Guest writes go to the private in-memory copy. |
 | `--disk-out PATH` | PC only. Save the resulting hard disk to a new raw image after a successful run. Use that output as `--hard-disk` to boot it on a subsequent run. |
 | `--ega-rom PATH` | PC only, with a system ROM. Map a valid EGA option ROM at `0xC0000`. |

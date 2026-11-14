@@ -150,6 +150,10 @@ struct pc286 final : boothush_i286::Bus {
     bool read_failure_enabled = false;
     uint8_t read_failure_cylinder = 0, read_failure_head = 0, read_failure_sector = 0;
     uint64_t read_failures = 0;
+    bool hard_read_failure_enabled = false;
+    uint16_t hard_read_failure_cylinder = 0;
+    uint8_t hard_read_failure_head = 0, hard_read_failure_sector = 0;
+    uint64_t hard_read_failures = 0;
     bool future_input = false;
     bool extended_scan = false;
     unsigned pause_bytes = 0;
@@ -400,6 +404,13 @@ struct pc286 final : boothush_i286::Bus {
             sector == read_failure_sector) {
             ++read_failures;
             disk_status(regs, false, 0x20); // Controller failure; no bytes transferred.
+            return;
+        }
+        if (hard && operation == 0x02 && hard_read_failure_enabled &&
+            cylinder == hard_read_failure_cylinder && head == hard_read_failure_head &&
+            sector == hard_read_failure_sector) {
+            ++hard_read_failures;
+            disk_status(regs, true, 0x20); // Injected controller failure; no transfer.
             return;
         }
 
@@ -799,6 +810,19 @@ bool pc286_fail_floppy_read(pc286 *machine, unsigned cylinder, unsigned head, un
     return true;
 }
 
+bool pc286_fail_hard_disk_read(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector)
+{
+    if (!machine || !machine->built_in_firmware || !machine->hard_disk ||
+        cylinder >= PcatHardDisk::cylinders || head >= PcatHardDisk::heads ||
+        sector == 0 || sector > PcatHardDisk::sectors_per_track)
+        return false;
+    machine->hard_read_failure_enabled = true;
+    machine->hard_read_failure_cylinder = uint16_t(cylinder);
+    machine->hard_read_failure_head = uint8_t(head);
+    machine->hard_read_failure_sector = uint8_t(sector);
+    return true;
+}
+
 pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size)
@@ -941,6 +965,11 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.read_failure_head = machine->read_failure_head;
     state.read_failure_sector = machine->read_failure_sector;
     state.read_failures = machine->read_failures;
+    state.hard_read_failure_enabled = machine->hard_read_failure_enabled;
+    state.hard_read_failure_cylinder = machine->hard_read_failure_cylinder;
+    state.hard_read_failure_head = machine->hard_read_failure_head;
+    state.hard_read_failure_sector = machine->hard_read_failure_sector;
+    state.hard_read_failures = machine->hard_read_failures;
     if (machine->fault != nullptr) {
         state.fault_operation = machine->fault;
         state.fault_address = state.pc;

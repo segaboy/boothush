@@ -43,6 +43,18 @@ Disk `AH=02h`–`04h` accepts 1–127 sectors and validates CHS. Floppy transfer
 
 For deterministic loader error testing, `--fail-floppy-read C:H:S` requires the `pc286` profile, floppy image and built-in firmware (no `--rom`). It matches the **starting** CHS of every otherwise valid floppy `INT 13h AH=02h` read, including retries, and returns carry set, `AH=20h` (controller failure), `AL=0` and the same last-status value. No bytes are copied on an injected failure. Geometry and buffer errors take precedence. It does not affect fixed disks, verify, direct floppy-controller I/O, custom firmware, or reads that merely span the selected sector. On every run with the option, JSON includes `floppy_read_failure` with the selected `cylinder`, `head`, `sector`, `bios_status` (32), and `injected` count; zero means the selection was never reached on a valid read. The bootstrap's own INT 13h read is included. The original floppy remains unchanged. Injection is disabled unless explicitly requested.
 
+`--fail-hard-disk-read C:H:S` provides the same starting-CHS failure for a
+valid built-in firmware `INT 13h AH=02h` hard-disk read. It requires `pc286`,
+`--hard-disk` and no `--rom`; the selection must fit the model's 615:4:17
+geometry. Each matching read returns carry set, `AH=20h`, `AL=0`, and records
+the fixed-disk last status without copying data. Geometry and buffer errors
+take precedence. It does not inject failures into floppy reads, disk writes,
+verify calls, custom firmware or direct controller I/O. Reads that merely
+span the selected CHS do not match. JSON `hard_disk_read_failure` records the
+selection and injection count, including any matching bootstrap read. The
+original disk image stays unchanged; injection is disabled by default. This is
+a deterministic modeled failure, not a physical controller fault model.
+
 The machine has RAM at `00000h`–`9ffffh`, EGA aperture in `a0000h`–`bffffh`, optional EGA ROM at `c0000h`, system ROM at `f0000h` and the reset ROM alias at `ff0000h` in the 24-bit space. `--scancode CYCLE:BYTE` schedules raw keyboard set-2 bytes at guest CPU boundaries, including `f0` followed by the key byte for release; it does not touch the host keyboard. The built-in keyboard shim handles a limited set of translated keys, not an entire BIOS keyboard implementation. See [EGA diagnostics](ega.md) for graphics and caller-supplied text-font limitations.
 
 When at least one scancode is scheduled, the result JSON includes

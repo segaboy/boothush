@@ -113,6 +113,8 @@ struct request {
     bool pc_witness_cycles_set;
     bool fail_floppy_read_set;
     uint32_t fail_floppy_read[3];
+    bool fail_hard_disk_read_set;
+    uint32_t fail_hard_disk_read[3];
     struct inspection inspect[MAX_INSPECT_RANGES];
     size_t inspect_count;
     uint32_t inspect_total;
@@ -200,6 +202,10 @@ struct machine_state {
     bool read_failure_enabled;
     uint8_t read_failure_cylinder, read_failure_head, read_failure_sector;
     uint64_t read_failures;
+    bool hard_read_failure_enabled;
+    uint16_t hard_read_failure_cylinder;
+    uint8_t hard_read_failure_head, hard_read_failure_sector;
+    uint64_t hard_read_failures;
 };
 
 static volatile LONG cancel_requested;
@@ -426,6 +432,11 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
                 return "fail-floppy-read requires cylinder:head:sector within 80:2:15 geometry";
             request->fail_floppy_read_set = true;
             memcpy(request->fail_floppy_read, fields, sizeof(request->fail_floppy_read));
+        } else if (wcscmp(option, L"--fail-hard-disk-read") == 0 && !request->fail_hard_disk_read_set) {
+            if (!parse_fields(value, fields, 3) || fields[0] >= 615 || fields[1] >= 4 || fields[2] < 1 || fields[2] > 17)
+                return "fail-hard-disk-read requires cylinder:head:sector within 615:4:17 geometry";
+            request->fail_hard_disk_read_set = true;
+            memcpy(request->fail_hard_disk_read, fields, sizeof(request->fail_hard_disk_read));
         } else if (wcscmp(option, L"--hard-disk") == 0 && request->disk_path == NULL) {
             request->disk_path = value;
         } else if (wcscmp(option, L"--disk-out") == 0 && request->disk_out_path == NULL) {
@@ -649,6 +660,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->pc_witness_path != NULL && request->machine != MACHINE_PC286) return "pc-witness requires pc286";
     if (request->fail_floppy_read_set && (request->machine != MACHINE_PC286 || !request->floppy_path || request->rom_path))
         return "fail-floppy-read requires pc286, floppy, and built-in firmware";
+    if (request->fail_hard_disk_read_set && (request->machine != MACHINE_PC286 || !request->disk_path || request->rom_path))
+        return "fail-hard-disk-read requires pc286, hard disk, and built-in firmware";
     if (!request->pc_witness_path && (request->pc_witness_memory.length || request->pc_witness_io.length || request->pc_witness_cycles_set))
         return "pc-witness filters require pc-witness";
     if (!request->pc_witness_cycles_set) request->pc_witness_last = request->cycle_limit;
@@ -1144,6 +1157,11 @@ static struct machine_state get_state(const struct machine *machine)
         .read_failure_enabled = state.read_failure_enabled, .read_failure_cylinder = state.read_failure_cylinder,
         .read_failure_head = state.read_failure_head, .read_failure_sector = state.read_failure_sector,
         .read_failures = state.read_failures,
+        .hard_read_failure_enabled = state.hard_read_failure_enabled,
+        .hard_read_failure_cylinder = state.hard_read_failure_cylinder,
+        .hard_read_failure_head = state.hard_read_failure_head,
+        .hard_read_failure_sector = state.hard_read_failure_sector,
+        .hard_read_failures = state.hard_read_failures,
         .fault_address = state.fault_address, .fault_operation = state.fault_operation};
 }
 
@@ -1185,6 +1203,11 @@ static void print_result(const char *status, enum machine_kind machine,
         if (state.read_failure_enabled) {
             printf(",\"floppy_read_failure\":{\"cylinder\":%u,\"head\":%u,\"sector\":%u,\"injected\":%" PRIu64 ",\"bios_status\":32}",
                    state.read_failure_cylinder, state.read_failure_head, state.read_failure_sector, state.read_failures);
+        }
+        if (state.hard_read_failure_enabled) {
+            printf(",\"hard_disk_read_failure\":{\"cylinder\":%u,\"head\":%u,\"sector\":%u,\"injected\":%" PRIu64 ",\"bios_status\":32}",
+                   state.hard_read_failure_cylinder, state.hard_read_failure_head,
+                   state.hard_read_failure_sector, state.hard_read_failures);
         }
     }
     if (error != NULL) {
@@ -2153,6 +2176,7 @@ int wmain(int argc, wchar_t **argv)
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
+             "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "PC trace: --pc-witness PATH --pc-witness-memory ADDRESS:LENGTH\n"
              "  --pc-witness-io PORT:LENGTH --pc-witness-cycles FIRST:LAST\n"
              "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events,\n"
@@ -2172,6 +2196,9 @@ int wmain(int argc, wchar_t **argv)
     if (error == NULL && request.fail_floppy_read_set &&
         !pc286_fail_floppy_read(machine.pc, request.fail_floppy_read[0], request.fail_floppy_read[1], request.fail_floppy_read[2]))
         error = "cannot configure floppy read failure";
+    if (error == NULL && request.fail_hard_disk_read_set &&
+        !pc286_fail_hard_disk_read(machine.pc, request.fail_hard_disk_read[0], request.fail_hard_disk_read[1], request.fail_hard_disk_read[2]))
+        error = "cannot configure hard disk read failure";
     if (error == NULL && request.mouse_witness_path != NULL &&
         !mac128k_start_mouse_witness(machine.mac, request.mouse_witness_first, request.mouse_witness_last)) {
         error = "cannot initialize the mouse device witness";

@@ -95,6 +95,12 @@ field's exact behavior and stop-boundary rule are in the [PC/AT guide](pc-at.md)
 
 The built-in 286 firmware can deliberately fail a selected floppy read using `--fail-floppy-read C:H:S`. The two-track diagnostic loader begins its payload reads at `0:0:2` and `0:1:1`; choosing either exercises its error branch, while JSON records the number of injections. The [PC/AT guide](pc-at.md) defines status, matching, and limitations. This is a test facility, not a failure of ordinary disk reads.
 
+The corresponding `--fail-hard-disk-read C:H:S` tests valid fixed-disk reads
+in the built-in firmware. The newer ClasSICK whole-disk diagnostic has been
+checked at each of its actual linked payload reads; see
+[hard-disk fault evidence](pc286-hard-disk-fault-20261114.md). This remains a
+modeled fault, not a physical or production-loader qualification.
+
 The optional witness records CPU steps and hardware interrupt acknowledgements. Supply memory and port filters to include bus accesses, and use a cycle range to limit volume. The file header reports the stop cycle, saved event count and dropped event count. At most 65,536 events are retained. See the [README witness description](../README.md#local-process-api) for timing granularity and exception limitations.
 
 ```powershell
