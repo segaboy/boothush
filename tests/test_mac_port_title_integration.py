@@ -20,12 +20,15 @@ class MacPortTitleIntegration(unittest.TestCase):
         exe_hash=hashlib.sha256(exe.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory(dir=os.environ.get('BOOTHUSH_TEST_TMP')) as temp:
             root=Path(temp)
-            def run(name):
+            trace=root/'handoff.bhmouse'
+            def run(name, replay=False):
                 frames=root/(name+'.pbmseq');keys=root/(name+'.keyboard')
+                mouse=(['--mouse-replay',str(trace)] if replay else
+                       ['--mouse-dcd-invert','3','--mouse-motion','1000000:16:0',
+                        '--mouse-button','2000000:1','--mouse-button','2400000:0'])
+                if name=='first':mouse+=['--mouse-record',str(trace)]
                 cmd=[str(exe),'--machine','mac128k','--rom',str(rom),'--cycles','7000000','--timeout-ms','20000',
-                     '--mouse-dcd-invert','3','--mouse-motion','1000000:16:0',
-                     '--mouse-button','2000000:1','--mouse-button','2400000:0',
-                     '--key','3500000:0:1','--key','4500000:0:0',
+                     *mouse,'--key','3500000:0:1','--key','4500000:0:0',
                      '--inspect','0xb00:86','--keyboard-witness',str(keys),'--capture-series',str(frames),
                      '--capture-memory','0xb00:86','--capture-vbl','12','--capture-vbl','25','--capture-vbl','46']
                 p=subprocess.run(cmd,capture_output=True,text=True,timeout=25,
@@ -34,6 +37,13 @@ class MacPortTitleIntegration(unittest.TestCase):
                 return json.loads(p.stdout),keys.read_bytes(),frames.read_bytes()
             result,keys,frames=run('first')
             self.assertEqual((result,keys,frames),run('repeat'))
+            replay,replay_keys,replay_frames=run('replay',replay=True)
+            self.assertEqual((result['cycles'],result['mouse'],result['memory']),
+                             (replay['cycles'],replay['mouse'],replay['memory']))
+            self.assertEqual((keys,frames),(replay_keys,replay_frames))
+            def snapshots(report):
+                return [(s['cycle'],s['memory']) for s in report['frame_series']['samples']]
+            self.assertEqual(snapshots(result),snapshots(replay))
             self.assertEqual(result['status'],'cycle_limit')
             self.assertEqual(result['mouse']['pending'],0)
             witness=result['keyboard_witness']

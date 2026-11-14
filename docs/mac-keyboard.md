@@ -56,6 +56,16 @@ The non-x64 CTest selection passed 13/13 targets; its Python discovery ran
 or paused x64 lane was not tested. The port's canonical reproduction and
 limitations are in `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`.
 
+The optional integration additionally records the scheduled title mouse input
+and replays it with the same keyboard transitions. It checks matching captured
+frames, guest memory and keyboard witness, while allowing the replay-specific
+metadata to differ. With executable SHA-256
+`5d4f610e98cbb8b03476f28929d6e5c0f64b941aafac3c7d5b6ef12c76c7eeb3`
+and the `1a367b8e...` ROM, this focused integration passed on 2026-11-14.
+The port's `C:/Repos/.task-temp/nstb-handoff-replay-20261114-b` receipt
+preserves a separate five-capture replay and exact commands. These scheduled
+inputs do not establish real hardware or human behavior.
+
 ## Deterministic injected keyboard faults
 
 `--keyboard-fault COMMAND:OCCURRENCE:KIND:ARG` selects one outgoing command byte and its positive, one-based matching occurrence. The one-shot fault is opt-in and may be used with scheduled keyboard and mouse input. The JSON `keyboard_fault` object reports the selection, whether it triggered, and its modeled cycle. A fault that has not triggered by the stop is not evidence of guest recovery. Kind and argument are:
