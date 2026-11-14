@@ -12,6 +12,12 @@ Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each 
 
 The owner's 2026-11-14 direction makes native Mac128K and PC/AT 286 the next paired-release targets; x64 work is paused. The [original EGA/keyboard diagnostic](pc286-pair-probe-20261114.md) checks a centered 512x342 canvas and two directional cursor moves with scheduled keys. It does not run ClasSICK or establish a window, parity, human input or physical-hardware behavior. See the [PC/AT profile](pc-at.md) for exact firmware and keyboard limitations.
 
+ClasSICK's separate four-track diagnostic loader test now exercises injected
+read failure at each track boundary as well as its successful reads and a
+short-read control. Commands, media hashes and observations are in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+These checks do not qualify a physical BIOS or a production boot loader.
+
 A separate [keyboard-controlled frame experiment](pc286-keyboard-drag-20261114.md) checks an original rectangular frame through a toggled press, move, release and ignored post-release movement. It tests this modeled device path with synthetic input, not ClasSICK window behavior or physical dragging.
 
 The [Mac-sized bitmap comparison](mac-pc286-bitmap-20261114.md) loads a caller-supplied original PBM into an original 286 test guest and compares all EGA canvas and margin pixels. It is useful for cross-project display experiments, but does not run a ClasSICK renderer or establish behavioral parity.
