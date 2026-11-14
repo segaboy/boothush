@@ -16,6 +16,8 @@ A separate [keyboard-controlled frame experiment](pc286-keyboard-drag-20261114.m
 
 The [Mac-sized bitmap comparison](mac-pc286-bitmap-20261114.md) loads a caller-supplied original PBM into an original 286 test guest and compares all EGA canvas and margin pixels. It is useful for cross-project display experiments, but does not run a ClasSICK renderer or establish behavioral parity.
 
+Not Super Tilt Bro's experimental mouse-title-to-keyboard-play ROM is another headless Mac integration consumer. Its canonical receipt is `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`: it records the exact ROM and executable hashes, bounded input schedules, keyboard-fault retry, guest observations and a controlled comparison of mouse-edge intervals. In that particular guest/model combination, delivery of all scheduled transitions did not guarantee that the guest tracked them accurately. The port's game-informed implementation is not admitted as a ClasSICK input, and the result neither diagnoses a BootHush defect nor qualifies physical hardware or human input.
+
 ## Preserved x86-64 status
 
 BootHush does not yet boot the 64-bit ClasSICK port. The 286 profile cannot run it. A separate read-only, headless `--verify-x64-media` command checks the supplied GPT/FAT32 image and its embedded PE32+ EFI payload; it is not a guest run. The experimental software probe can interpret a limited number of actual EFI instructions without a hypervisor, but does not provide a UEFI context or boot. See [x64 enablement](classick-x64.md) for commands, results, and remaining work.
