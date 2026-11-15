@@ -65,11 +65,15 @@ class PcAtIntegrationTests(unittest.TestCase):
     def test_keyboard_schedule_accounting(self):
         # These counts describe delivery to the model, not guest consumption.
         image = self.write('idle.img', boot_image(bytes.fromhex('faebfe'), 1228800))
+        neutral = self.run_guest('--floppy', image, cycles=4000)
+        self.assertNotIn('pc_keyboard_input', neutral)
+        self.assertNotIn('pc_keyboard_buffer', neutral)
         result = self.run_guest('--floppy', image, '--scancode', '1000:0x74',
                                 '--scancode', '2000:0xf0', cycles=4000)
         self.assertEqual(result['status'], 'cycle_limit')
         self.assertEqual(result['pc_keyboard_input'],
                          {'scheduled': 2, 'accepted': 2, 'rejected': 0, 'pending': 0})
+        self.assertEqual(result['pc_keyboard_buffer'], {'queued': 1, 'capacity': 32})
 
         # The stop predicate is checked before future scheduled input.
         image = self.write('early.img', boot_image(bytes.fromhex('b0aae680faebfe'), 1228800))
@@ -78,6 +82,7 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'condition_met')
         self.assertEqual(result['pc_keyboard_input'],
                          {'scheduled': 2, 'accepted': 0, 'rejected': 0, 'pending': 2})
+        self.assertEqual(result['pc_keyboard_buffer'], {'queued': 0, 'capacity': 32})
 
         # The first byte beyond model queue capacity is rejected; subsequent
         # scheduled bytes are still pending when the run stops on the error.
@@ -89,6 +94,16 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'machine_fault')
         self.assertEqual(result['pc_keyboard_input'],
                          {'scheduled': 34, 'accepted': 32, 'rejected': 1, 'pending': 1})
+        self.assertEqual(result['pc_keyboard_buffer'], {'queued': 32, 'capacity': 32})
+
+        # The accepted byte disappears from the snapshot when the guest reads
+        # port 60h. Scheduled input and controller output are different queues.
+        image = self.write('consume.img', boot_image(bytes.fromhex('b9e803 e2fe e460 b0aa e680 faebfe'), 1228800))
+        result = self.run_guest('--floppy', image, '--scancode', '1000:0x74',
+                                '--until-post', '0xaa', cycles=100000)
+        self.assertEqual(result['status'], 'condition_met')
+        self.assertEqual(result['pc_keyboard_input']['accepted'], 1)
+        self.assertEqual(result['pc_keyboard_buffer'], {'queued': 0, 'capacity': 32})
 
     def test_selected_hard_disk_read_failure(self):
         # Two independently addressed BIOS reads; retain first data if the

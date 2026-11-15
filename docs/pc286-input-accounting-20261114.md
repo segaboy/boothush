@@ -57,3 +57,26 @@ per edge. Canonical commands, image hashes and limits are recorded in
 `C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
 These are bounded modeled inputs, not human, real-hardware, production-boot
 or release-qualification results.
+
+## Controller output snapshot
+
+The CLI now reports the modeled controller output queue separately from
+scheduled input. A side-effect-free snapshot shows queued bytes and the
+model's 32-byte capacity at stop; controller replies and translated output
+share it. The integration test covers an empty queue before scheduled input,
+an accepted translation prefix, a byte consumed by guest port input, a full
+queue and rejection, and the no-input omission. All 26 PC286 integration
+tests passed with the new twin executable SHA-256
+`e84e214750c69907f6c5052397243661392810d1f1b14e357d6387a29008885d`;
+build manifests and tool/source hashes are in
+`C:/Repos/.task-temp/boothush-pc-queue-active-20261115-a/report.json`.
+Build and test with the instructions in
+[active profile build](active-profile-build-20261115.md). This is a model
+snapshot, not a physical controller capacity or proof of guest action.
+
+The ClasSICK raw-input burst experiment exercised the new field, observed
+the model queue full on three bounded rejections, and compared its behavior
+with the previous executable. Exact commands, states, captures and limitations
+are in `C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+The port's mouse-title/native-jab scenarios passed on the same new executable;
+its report is `C:/Repos/.task-temp/nstb-jab-pc-queue-regression-20261115-a/report.json`.

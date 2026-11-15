@@ -47,6 +47,7 @@ typedef struct {
     uint8_t post;
     bool post_written;
     bool halted;
+    uint32_t keyboard_output_queued, keyboard_output_capacity;
     bool read_failure_enabled;
     uint8_t read_failure_cylinder, read_failure_head, read_failure_sector;
     uint64_t read_failures;

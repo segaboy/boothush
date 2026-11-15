@@ -202,6 +202,7 @@ struct machine_state {
     uint8_t post;
     bool post_written;
     bool halted;
+    uint32_t keyboard_output_queued, keyboard_output_capacity;
     bool read_failure_enabled;
     uint8_t read_failure_cylinder, read_failure_head, read_failure_sector;
     uint64_t read_failures;
@@ -1171,6 +1172,8 @@ static struct machine_state get_state(const struct machine *machine)
         .cycles = state.cycles, .pc = state.pc, .cs = state.cs, .ip = state.ip,
         .last_exception = state.last_exception,
         .post = state.post, .post_written = state.post_written, .halted = state.halted,
+        .keyboard_output_queued = state.keyboard_output_queued,
+        .keyboard_output_capacity = state.keyboard_output_capacity,
         .read_failure_enabled = state.read_failure_enabled, .read_failure_cylinder = state.read_failure_cylinder,
         .read_failure_head = state.read_failure_head, .read_failure_sector = state.read_failure_sector,
         .read_failures = state.read_failures,
@@ -1264,6 +1267,8 @@ static void print_result(const char *status, enum machine_kind machine,
         printf(",\"pc_keyboard_input\":{\"scheduled\":%zu,\"accepted\":%zu,\"rejected\":%zu,\"pending\":%zu}",
                mouse->scheduled, mouse->scheduled_accepted, rejected,
                mouse->scheduled - mouse->scheduled_accepted - rejected);
+        printf(",\"pc_keyboard_buffer\":{\"queued\":%" PRIu32 ",\"capacity\":%" PRIu32 "}",
+               state.keyboard_output_queued, state.keyboard_output_capacity);
     }
     if(keyboard) printf(",\"keyboard_witness\":{\"events\":%zu,\"dropped\":%" PRIu64 ",\"rejected\":%" PRIu64 ",\"scheduled\":%zu,\"accepted\":%zu,\"pending\":%zu,\"limit\":%u,\"range_reached\":%s}",
                         keyboard->count,keyboard->dropped,keyboard->rejected,keyboard->scheduled,keyboard->accepted,keyboard->scheduled-keyboard->accepted,keyboard->limit,keyboard->range_reached?"true":"false");

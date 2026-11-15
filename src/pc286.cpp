@@ -994,6 +994,8 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.post = machine->post;
     state.post_written = machine->post_written;
     state.halted = machine->terminal_halt();
+    state.keyboard_output_queued = static_cast<uint32_t>(machine->keyboard.output_queued());
+    state.keyboard_output_capacity = static_cast<uint32_t>(machine->keyboard.output_capacity());
     state.read_failure_enabled = machine->read_failure_enabled;
     state.read_failure_cylinder = machine->read_failure_cylinder;
     state.read_failure_head = machine->read_failure_head;

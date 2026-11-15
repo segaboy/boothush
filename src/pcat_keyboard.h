@@ -22,6 +22,9 @@ public:
 
     // Supplies one raw set-2 byte. False means no byte was accepted.
     bool inject_scancode(std::uint8_t scan_code);
+    // Diagnostic snapshot of the shared controller output queue; no reads.
+    std::size_t output_queued() const { return output_size_; }
+    std::size_t output_capacity() const { return output_.size(); }
     // Relative screen coordinates: +X right, +Y down. One atomic PS/2 packet.
     bool inject_mouse(std::int32_t dx, std::int32_t dy, bool primary);
     std::uint64_t dropped_aux_replies() const { return dropped_aux_replies_; }

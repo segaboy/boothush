@@ -56,6 +56,11 @@ For keyboard timeout and malformed-byte paths, `--keyboard-fault` selects a sing
 
 Repeat `--inspect` for each physical range. Up to 16 ranges are allowed, with 4,096 bytes per range and 16,384 bytes total. Overlapping ranges are returned independently in request order. Reads use side-effect-free diagnostic access to Mac RAM or PC conventional RAM and its video aperture. A single range returns the established `memory` object. Multiple ranges return `memory_ranges`, whose entries each contain `address` and hexadecimal `bytes`.
 
+For a PC run with scheduled scancodes, `pc_keyboard_input` accounts for
+scheduled delivery, and `pc_keyboard_buffer` snapshots the controller model's
+output queue at stop. These are distinct queues and neither substitutes for
+guest state inspection. See [PC/AT keyboard accounting](pc-at.md).
+
 ```powershell
 $exe = 'C:\Repos\boothush\out\windows\boothush.exe'
 $disk = 'C:\ClasSICK\boothush-headless-20261112-a\pc286-span-final\baseline.img'

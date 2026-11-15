@@ -84,6 +84,15 @@ The stop condition is checked before input at a boundary, so an early stop may
 leave pending events. No field is emitted if no scancodes were scheduled.
 This accounting describes injection into the model, not physical input.
 
+Those runs also report `pc_keyboard_buffer` with `queued` and `capacity` at
+the stop boundary. This is a side-effect-free snapshot of the controller
+model's shared output queue, currently 32 bytes, including any controller
+replies as well as translated keyboard output. Translation prefixes can be
+accepted without adding a queued byte. This queue is distinct from the
+not-yet-submitted scheduled events counted as `pending`; neither count proves
+which keys the guest acted on or represents a physical controller capacity.
+The snapshot is reported only when scancodes were scheduled.
+
 The `--hard-disk` input is loaded into a private memory copy. Guest fixed-disk writes affect that copy, not the input file. `--disk-out NEW_PATH` writes the copy only if the run succeeds and the output path does not exist. Supply that new file as `--hard-disk` on the next run to test persistence. Failure, timeout, cancellation or an unmet condition does not save the disk copy. A snapshot or a successful boot of an original fixture is not a ClasSICK installation. Keep input disks and generated outputs outside Git.
 
 With a fixed emulator build, ROM, media, cycle-scheduled input and stop condition, guest output can be compared between runs; a wall-clock timeout, changed build or external host input can change the outcome. The bounded 286 witness records steps, filtered byte memory and port events, IRQ acknowledgements and changes to the last exception; it can drop rows after 65,536 events, and firmware-shim operations are not independently traced. See the [README witness contract](../README.md#local-process-api).
