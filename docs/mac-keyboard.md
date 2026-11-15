@@ -78,6 +78,10 @@ The same integration passed for the opt-in two-player native-C title ROM
 SHA-256 `b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126`.
 The port's separate evidence covers its player-two velocity, key overlap and
 simultaneous-input scenarios; these remain modeled input, not physical tests.
+The later port combat regression uses this same ROM after mouse Start and
+checks both players' hits, a miss, attack lock, pixels and damage mutations.
+Its canonical receipt is
+`C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`.
 
 ## Optional port native-C fixture
 
