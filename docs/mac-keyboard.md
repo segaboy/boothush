@@ -133,6 +133,13 @@ The queue still accepts scheduled transitions subject to its normal capacity. A 
 
 The optional pinned ClasSICK candidate test (ROM SHA-256 `b3a50ad806b589fdc02a4de579e6d72700c9107fb273d9ca73026320bebed807`) selects the first `0x14` command, starting at modeled cycle 56844836 in that setup. Its KBD1 guest diagnostics report one timeout for stall, no-reply, and a 1,500,000-cycle disconnect, and one invalid reply for replacement byte zero. In that exact run, delays of 991993 and 991994 cycles fall on opposite sides of the guest's timeout boundary. These values depend on this guest and model and are not physical measurements. The guest latches the timeout; the synthetic device tests independently check queue preservation and resumed exchanges, so this is not a demonstration of guest recovery after timeout.
 
+The Not Super Tilt Bro project also used the scheduled mouse and keyboard
+interfaces to reproduce and fix a player-one attack movement issue. Its
+seven-case guest integration run, negative control, inputs and executable
+identity are recorded in `C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`.
+This exercises BootHush with another guest; it does not validate physical
+keyboard timing or make the game code a ClasSICK implementation input.
+
 ## Display witness
 
 `--display-witness NEW_PATH` records modeled VBL and bus-fault events. Add `--display-witness-memory ADDRESS:LENGTH` to record bus writes overlapping a selected physical RAM range, such as the active framebuffer, and `--display-witness-range FIRST:LAST` to filter absolute modeled cycles. Both filters require the witness option. Up to 8,192 events are retained; JSON reports count and dropped rows. The file begins `BHMACDISPLAY1 FIRST LAST STOP COUNT DROPPED RAM_ADDRESS RAM_LENGTH`, then `cycle vbl pc kind address value width`. For a `write`, address is the physical RAM offset, value is the complete original guest write in big-endian significance, and width is 1, 2 or 4 bytes; a write may overlap only part of the selected range. For a `vbl`, value reports how many VBLs were advanced at that model tick. For a `fault`, address is the failing bus address; the run's JSON fault reports the operation. PC is the emulator's current instruction context. These are model-clock observations, not a pixel-latched display or independently verified hardware timing. The witness works without mouse input or mouse tracing.
