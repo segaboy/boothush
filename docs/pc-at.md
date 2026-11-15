@@ -87,6 +87,10 @@ observation because CRC startup takes longer than the old sum. The exact
 guest, images, emulator identity, tests and limitations are recorded in
 `C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
 This integration result does not establish a physical BIOS or installation.
+The same diagnostic now optionally checks the built-in model's returned
+geometry before reading its payload; wrong expected geometry and unsupported
+drive controls stop before loading. The paired session, source and model
+limitations are recorded in the same ClasSICK evidence.
 
 ## Hardware references
 
