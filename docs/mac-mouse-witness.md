@@ -111,3 +111,10 @@ checkpoint. At 4,096 cycles per edge with guard zero, its eight checkpoints
 and replay passed. Its exact sources, commands and results are in
 `C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
 These are guest/model results and do not make a physical timing claim.
+
+On 2026-11-15 a separate ClasSICK scratch build coalesced its foreground
+diagnostic snapshots to examine interrupt-exclusion overhead. It and the
+unchanged control still failed the 2,048-cycle modeled input case, while both
+passed the 4,096-cycle paired scenario. The experiment was not adopted; source
+identities, exact results and limits are recorded in the linked ClasSICK
+evidence. This observation does not identify a sole cause or physical timing.
