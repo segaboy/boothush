@@ -14,8 +14,14 @@ def main():
     p.add_argument('--emulator',required=True,type=Path);p.add_argument('--rom',required=True,type=Path)
     p.add_argument('--output',required=True,type=Path,help='new output directory')
     p.add_argument('--input-cycle',type=int,help='optional absolute guest-cycle input time')
+    p.add_argument('--witness-memory',default='0xc1c:4',help='guest RAM range to trace (default: published omission counter)')
     a=p.parse_args()
-    digest=sha(a.rom);script_sha=sha(Path(__file__))
+    try:
+        address,length=(int(part,0) for part in a.witness_memory.split(':'))
+    except ValueError:
+        p.error('witness memory must be ADDRESS:LENGTH')
+    if address<0 or length<=0 or address+length>0x20000:p.error('witness range must fit Mac physical RAM')
+    digest=sha(a.rom);script_sha=sha(Path(__file__));emulator_sha=sha(a.emulator)
     if digest not in DIGESTS:raise ValueError('unexpected fixture ROM hash')
     a.output.mkdir(parents=True,exist_ok=False)
     start=a.input_cycle if a.input_cycle is not None else (100000000 if digest==DIGESTS[1] else 60000000)
@@ -41,14 +47,16 @@ def main():
             frame=a.output/f'{i}-{suffix}.pbm';trace=a.output/f'{i}.trace'
             command=common+['--frame',str(frame)]
             if suffix=='traced':command+=['--mouse-witness',str(trace),'--mouse-witness-detail','1',
-                                          '--mouse-witness-memory','0xc1c:4','--mouse-witness-range',f'{start}:{stop}']
+                                          '--mouse-witness-memory',a.witness_memory,'--mouse-witness-range',f'{start}:{stop}']
             commands.append(command)
             r=subprocess.run(command,capture_output=True,text=True,timeout=35,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             if r.returncode:raise RuntimeError(r.stdout+r.stderr)
             records.append((json.loads(r.stdout),frame.read_bytes()))
         if records[0]!=records[1]:raise RuntimeError(f'witness changed guest output in case {i}')
         header=(a.output/f'{i}.trace').read_text().splitlines()[0].split()
-        if header[0]!='BHMACMOUSE3' or header[5]!='0' or header[7]!='1':raise RuntimeError(f'incomplete witness in case {i}: {header}')
+        if (header[0]!='BHMACMOUSE3' or header[5]!='0' or header[7]!='1' or
+            (int(header[11]),int(header[12]))!=(address,length)):
+            raise RuntimeError(f'incomplete or mismatched witness in case {i}: {header}')
         result=records[0][0];data=bytes.fromhex(result['memory']['bytes'])
         def word(addr):return int.from_bytes(data[addr-0xb00:addr-0xb00+4],'big')
         results.append({'edge':edge,'guard':guard,'delta':[dx,dy],'pointer':[word(0xc5c),word(0xc60)],
@@ -60,7 +68,9 @@ def main():
                         'traced_matches_untraced':True})
     if sha(a.rom)!=digest:raise RuntimeError('ROM changed')
     if sha(Path(__file__))!=script_sha:raise RuntimeError('probe script changed during run')
-    report={'rom_sha256':digest,'emulator_sha256':sha(a.emulator),'script_sha256':script_sha,
+    if sha(a.emulator)!=emulator_sha:raise RuntimeError('emulator changed during run')
+    report={'rom_sha256':digest,'emulator_sha256':emulator_sha,'script_sha256':script_sha,
+            'witness_memory':a.witness_memory,
             'readiness':{'command':readiness,'result':ready_data},'cases':results,
             'scope':'Modeled synthetic input; no physical timing or fault attribution.'}
     (a.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')

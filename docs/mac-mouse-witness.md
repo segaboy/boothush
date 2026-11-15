@@ -118,3 +118,37 @@ unchanged control still failed the 2,048-cycle modeled input case, while both
 passed the 4,096-cycle paired scenario. The experiment was not adopted; source
 identities, exact results and limits are recorded in the linked ClasSICK
 evidence. This observation does not identify a sole cause or physical timing.
+
+### Direct counter trace
+
+On 2026-11-15 the probe gained `--witness-memory ADDRESS:LENGTH`; its default
+remains the published-counter range `0xc1c:4`. It validates the range before
+creating output, checks that each trace header names the requested range,
+and verifies the emulator executable's identity remains unchanged. An invalid
+`0x1ffff:2` range was rejected before output creation. The original default
+and direct-counter paths each completed nine traced/untraced comparisons.
+
+For the exact Windows-built ROM `6b622b2b...`, ClasSICK's own linked symbol and
+compiled structure offset identify the internal omission counter at `0xb80:4`.
+That address is specific to that ROM and profile. The derivation, image and
+compiler identities are in
+`C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
+Reproduce with a fresh output directory:
+
+```powershell
+$py = 'C:/Users/segab/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe'
+$bh = 'C:/Repos/.task-temp/boothush-pc-hard-fault-twins-20261114-c/a/boothush.exe'
+$rom = 'C:/Repos/.task-temp/mac-windows-os-speed-control-20261114-a/Os-a/classick-loaded-app.rom'
+& $py -B scripts/probe_classick_mouse.py --emulator $bh --rom $rom --output C:/Repos/.task-temp/NEW-DIRECT-TRACE --witness-memory 0xb80:4
+```
+
+In `C:/Repos/.task-temp/boothush-mac-direct-omissions-20261115-b/report.json`,
+each 2,048-cycle direction recorded 48 ordered 16-bit writes corresponding
+to 24 longword counter updates. The four 4,096-cycle cases recorded none;
+traced and untraced outputs matched and all selected witness ranges completed
+without drops. In the +X fast trace, SCC pending was set at cycle 100006154,
+another phase arrived at 100008214 before interrupt acceptance at that same
+boundary, and the first internal counter write occurred at 100017216. Before
+that write the guest's collected SCC A status changed from 12 to 4 across its
+acknowledgment. This ordered model observation does not establish physical
+bus timing, a hardware rate limit, or which component is solely responsible.
