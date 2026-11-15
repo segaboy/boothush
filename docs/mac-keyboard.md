@@ -156,6 +156,12 @@ file. This is a guest/model integration observation, not physical input or
 game-completeness evidence; the game-derived implementation remains in the
 port project.
 
+The port later exercised source-derived stage-specific damage for both players
+after the same mouse-title handoff. Its three-hit, saturation and mutation
+cases, input witnesses, emulator identity and limits are recorded in the
+port's `docs/jab-chain-evidence.md`. These remain model/guest observations;
+the game-derived logic is not a ClasSICK implementation input.
+
 ## Display witness
 
 `--display-witness NEW_PATH` records modeled VBL and bus-fault events. Add `--display-witness-memory ADDRESS:LENGTH` to record bus writes overlapping a selected physical RAM range, such as the active framebuffer, and `--display-witness-range FIRST:LAST` to filter absolute modeled cycles. Both filters require the witness option. Up to 8,192 events are retained; JSON reports count and dropped rows. The file begins `BHMACDISPLAY1 FIRST LAST STOP COUNT DROPPED RAM_ADDRESS RAM_LENGTH`, then `cycle vbl pc kind address value width`. For a `write`, address is the physical RAM offset, value is the complete original guest write in big-endian significance, and width is 1, 2 or 4 bytes; a write may overlap only part of the selected range. For a `vbl`, value reports how many VBLs were advanced at that model tick. For a `fault`, address is the failing bus address; the run's JSON fault reports the operation. PC is the emulator's current instruction context. These are model-clock observations, not a pixel-latched display or independently verified hardware timing. The witness works without mouse input or mouse tracing.
