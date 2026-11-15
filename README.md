@@ -99,7 +99,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-witness-detail 1` | With `--mouse-witness`, select the extended `BHMACMOUSE2` format with input, guard, CPU interrupt acceptance, PC context and queue information. See [correlated mouse witness](docs/mac-mouse-witness.md). The original format remains the default. |
 | `--mouse-witness-memory ADDRESS:LENGTH` | With the detailed Mac witness, add guest RAM writes overlapping the selected physical RAM offsets. This selects the `BHMACMOUSE3` format; filtered bytes, bus width, coverage and drop counts are documented in the [witness guide](docs/mac-mouse-witness.md). |
 | `--input-after ADDRESS:WIDTH:VALUE` | Start a scheduled-input timeline when this physical-memory condition first matches. Scheduled cycle numbers become offsets from the first matching instruction boundary. Zero-offset events are applied at that boundary. Requires scheduled input and works headlessly with direct input or window messages. |
-| `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. With scheduled scancodes the result also reports the controller output queue at stop; see [PC/AT keyboard accounting](docs/pc-at.md). |
+| `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. |
 | `--pc-witness-memory ADDRESS:LENGTH` | With `--pc-witness`, record byte bus reads and writes within the specified physical range. |
 | `--pc-witness-io PORT:LENGTH` | With `--pc-witness`, record bus input and output within the specified port range. |
 | `--pc-witness-cycles FIRST:LAST` | With `--pc-witness`, restrict recorded events to these inclusive cycle boundaries. |
@@ -131,6 +131,9 @@ When video is requested, `video` in the result reports frame count, dimensions, 
 | 2 | `error` in the request, image handling, or diagnostics |
 
 If a readiness condition has not matched when the cycle limit is reached, status is `readiness_not_reached` and exit code is 1. Timeout and cancellation retain their usual statuses. With `--input-after`, `input_schedule` reports whether readiness was observed, the boundary cycle when available, the number scheduled, and the number accepted. `mouse.steps` and `mouse.pending` report delivered and pending transitions. A stop condition is evaluated independently and may stop a run before all scheduled work is accepted. `--mouse-record` supports direct relative motion as well as window input, recording absolute accepted cycles for replay. Reproduce separately scheduled keyboard input during replay. Readiness reads and all inspections are side-effect-free.
+
+When scancodes are scheduled, the result also reports the controller output
+queue at stop independently of `--pc-witness`; see [PC/AT keyboard accounting](docs/pc-at.md).
 
 The 286 witness begins with `BHPC286W1 STOP COUNT DROPPED` and a column header. Each row gives cycle, CS, IP, physical PC, kind, address, value and width. `step` marks a CPU step, including prefixes and REP iterations. Filtered `read`/`write` are byte bus accesses, `in`/`out` are port operations, `irq` is an acknowledged hardware interrupt vector, and `exception` is a change in the CPU's last-exception value. Repeated identical exceptions may therefore be omitted. Software interrupt instructions and firmware-shim memory operations are not separately traced. Accesses within a CPU step share the step's starting cycle and instruction location. A maximum of 65,536 events is retained and further events are counted in `DROPPED`. A cycle filter is recommended for long runs. This is emulator execution evidence, and does not establish physical-hardware timing.
 
