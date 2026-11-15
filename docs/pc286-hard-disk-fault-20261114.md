@@ -96,6 +96,13 @@ linked-session results are in the ClasSICK evidence above. This tests guest
 robustness against a synthetic clobber; BootHush was not changed to claim a
 physical BIOS clobbers the register.
 
+ClasSICK also used bounded physical-memory inspection with an instrumented
+diagnostic loader to observe its 286 guest's stack watermark at eight window
+checkpoints. The linked evidence above records the separate known-depth
+control, input identities and limitations. This exercises BootHush's memory
+inspection and PC model; it is not a physical stack measurement or evidence
+of a maximum for all paths.
+
 Reproduce the partial twin build with a new directory:
 
 ```powershell
