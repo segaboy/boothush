@@ -56,6 +56,13 @@ and limits are in
 This remains a destructive, disposable model experiment, not an installer for
 existing media or proof of physical behavior.
 
+On 2026-11-15, the ClasSICK diagnostic copy was split into three modeled
+track-bounded writes and three reads. Each was failed independently with
+these injectors; full saved-disk comparisons show which earlier writes remain.
+A separate test-only readback-RAM mutation exercised the mismatch stop. See
+the same ClasSICK evidence for commands and results. These tests do not model
+partial sectors, power interruption or physical-media recovery.
+
 Reproduce the partial twin build with a new directory:
 
 ```powershell
