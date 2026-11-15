@@ -55,6 +55,14 @@ selection and injection count, including any matching bootstrap read. The
 original disk image stays unchanged; injection is disabled by default. This is
 a deterministic modeled failure, not a physical controller fault model.
 
+`--fail-hard-disk-read-once C:H:S` uses the same selection and restrictions,
+but injects only the first valid matching read. Later matching reads are
+handled normally. JSON adds `limit: 1` and reports the actual injected count;
+zero means no matching read was reached. Select either persistent or one-shot
+read injection, not both. Resetting the modeled disk does not rearm a consumed
+one-shot failure. Reconfiguring the internal machine API starts a new count.
+This synthetic fault is not evidence of how physical media fails.
+
 `--fail-hard-disk-write C:H:S` applies the same starting-CHS selection and
 geometry/firmware restrictions to valid `INT 13h AH=03h` fixed-disk writes.
 It returns carry set, `AH=20h`, `AL=0`, records the disk status, and makes no

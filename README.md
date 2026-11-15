@@ -46,6 +46,8 @@ Choose a writable build directory. To build the executable without Python, add `
 
 For the current Mac/286 development scope, the [active-profile twin build](docs/active-profile-build-20261115.md) rebuilds those components and NES while retaining the identified prebuilt x64 media dependency. It is an engineering build, not a source-complete distribution build.
 
+The PC/AT model can inject a persistent or one-shot hard-disk read failure for bounded recovery tests; see the [PC/AT guide](docs/pc-at.md) for selection, status and limits.
+
 - Set `BOOTHUSH_CLASSICK_ROM` to the local 64 KiB startup fixture with SHA-256 `be506ad6e41d06ebcfe11678a4f6a64ba560920b16efa7fef884794f51690005` to verify the original ROM’s diagnostic words and framebuffer checksum.
 - Set `BOOTHUSH_CLASSICK_WINDOW_ROM` and `BOOTHUSH_CLASSICK_WINDOW_ROM_SHA256` for the short-collect invert-3 ClasSICK ROM with the CS09 and MWP1 v2 diagnostics. This exercises a scheduled press, release and four quadrature transitions, then checks guest motion and loss counters.
 - Set `BOOTHUSH_CLASSICK_LIVE_ROM` to the 2026-11-12 anchored ClasSICK candidate with SHA-256 `faf37c6f96f8eb2ee6cf7a1e58a8b1b9538055d2fc89493c7419eeea816f6c8c`. The native mouse integration test sends messages to an invisible BootHush window and verifies the four corners, two title-bar drags, release, and a content click against the ROM's RAM diagnostics and framebuffer.

@@ -47,3 +47,11 @@ $tools = 'C:/Repos/ClasSICK-0.97/.tools'
 
 The retained archive is a build dependency, not an authorization to develop
 the x64 lane. Generated executables and inputs remain outside Git.
+
+The later one-shot disk-read injection produced another matching pair, SHA-256
+`ef7b5d9cf89fd0cc0eb1a816b5e489ffc34931349370a178c0579267dcc2ff2a`.
+Its full source/tool and retained-archive identities are in
+`C:/Repos/.task-temp/boothush-transient-active-twins-20261115-b/report.json`.
+On this pair the 26-case PC suite, two title checks, and eight game combat
+scenarios passed; the linked ClasSICK evidence records the retry and paired
+window checks. The same partial-build and provenance limits apply.

@@ -151,6 +151,7 @@ struct pc286 final : boothush_i286::Bus {
     uint8_t read_failure_cylinder = 0, read_failure_head = 0, read_failure_sector = 0;
     uint64_t read_failures = 0;
     bool hard_read_failure_enabled = false;
+    bool hard_read_failure_once = false;
     uint16_t hard_read_failure_cylinder = 0;
     uint8_t hard_read_failure_head = 0, hard_read_failure_sector = 0;
     uint64_t hard_read_failures = 0;
@@ -412,7 +413,7 @@ struct pc286 final : boothush_i286::Bus {
         }
         if (hard && operation == 0x02 && hard_read_failure_enabled &&
             cylinder == hard_read_failure_cylinder && head == hard_read_failure_head &&
-            sector == hard_read_failure_sector) {
+            sector == hard_read_failure_sector && (!hard_read_failure_once || hard_read_failures == 0)) {
             ++hard_read_failures;
             disk_status(regs, true, 0x20); // Injected controller failure; no transfer.
             return;
@@ -831,6 +832,15 @@ bool pc286_fail_hard_disk_read(pc286 *machine, unsigned cylinder, unsigned head,
     machine->hard_read_failure_cylinder = uint16_t(cylinder);
     machine->hard_read_failure_head = uint8_t(head);
     machine->hard_read_failure_sector = uint8_t(sector);
+    machine->hard_read_failure_once = false;
+    machine->hard_read_failures = 0;
+    return true;
+}
+
+bool pc286_fail_hard_disk_read_once(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector)
+{
+    if (!pc286_fail_hard_disk_read(machine, cylinder, head, sector)) return false;
+    machine->hard_read_failure_once = true;
     return true;
 }
 
@@ -990,6 +1000,7 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.read_failure_sector = machine->read_failure_sector;
     state.read_failures = machine->read_failures;
     state.hard_read_failure_enabled = machine->hard_read_failure_enabled;
+    state.hard_read_failure_once = machine->hard_read_failure_once;
     state.hard_read_failure_cylinder = machine->hard_read_failure_cylinder;
     state.hard_read_failure_head = machine->hard_read_failure_head;
     state.hard_read_failure_sector = machine->hard_read_failure_sector;

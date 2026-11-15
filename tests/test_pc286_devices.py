@@ -142,6 +142,41 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(missing['status'],'error')
         self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),original)
 
+    def test_transient_hard_disk_read_failure_and_retry(self):
+        # The first valid read fails without changing RAM. After a disk reset,
+        # a retry and a further identical read both succeed with original data.
+        program = checked_program((
+            ('31c0 8ec0 bb0006 b80102 b90200 ba8000 cd13', 0x73), # fail if carry clear
+            ('80fc20', 0x75),                                    # AH must be 20h
+            ('803e000600', 0x75),                                # destination untouched
+            ('b80000 ba8000 cd13', 0x72),                        # reset succeeds
+            ('bb0006 b80102 b90200 ba8000 cd13', 0x72),
+            ('813e00064248', 0x75),                              # BH at 0600h
+            ('bb0008 b80102 b90200 ba8000 cd13', 0x72),
+            ('813e00084248', 0x75),
+        ), 0x42)
+        image=boot_image(program,HARD_DISK_SIZE);image[512:516]=b'BHAT'
+        disk=self.write('transient-read.img',image);before=hashlib.sha256(disk.read_bytes()).hexdigest()
+        result=self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-once','0:0:2',
+                              '--until-post','0x42','--inspect','0x600:4','--inspect','0x800:4')
+        self.assertEqual(result['status'],'condition_met')
+        self.assertEqual(result['hard_disk_read_failure'],
+                         {'cylinder':0,'head':0,'sector':2,'injected':1,'bios_status':32,'limit':1})
+        self.assertEqual([bytes.fromhex(row['bytes']) for row in result['memory_ranges']], [b'BHAT',b'BHAT'])
+        # The old persistent option must still fail on the retry.
+        persistent=self.run_guest('--hard-disk',disk,'--fail-hard-disk-read','0:0:2','--until-post','0xff')
+        self.assertEqual(persistent['status'],'condition_met')
+        self.assertEqual(persistent['hard_disk_read_failure']['injected'],2)
+        self.assertNotIn('limit',persistent['hard_disk_read_failure'])
+        invalid=self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-once','615:0:1',exit_code=2)
+        self.assertEqual(invalid['status'],'error')
+        missing=self.run_guest('--fail-hard-disk-read-once','0:0:2',exit_code=2)
+        self.assertEqual(missing['status'],'error')
+        duplicate=self.run_guest('--hard-disk',disk,'--fail-hard-disk-read','0:0:2',
+                                 '--fail-hard-disk-read-once','0:0:2',exit_code=2)
+        self.assertEqual(duplicate['status'],'error')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
+
     def test_selected_hard_disk_write_failure(self):
         program = bytearray.fromhex('31c0 8ec0 bb007d b80103 b90200 ba8000 cd13 72 00')
         branch = len(program)-1

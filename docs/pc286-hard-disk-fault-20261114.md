@@ -63,6 +63,31 @@ A separate test-only readback-RAM mutation exercised the mismatch stop. See
 the same ClasSICK evidence for commands and results. These tests do not model
 partial sectors, power interruption or physical-media recovery.
 
+## One-shot read failure and retry
+
+On 2026-11-15, `--fail-hard-disk-read-once` added a single modeled failure
+at a selected valid starting CHS. The [PC/AT guide](pc-at.md) defines the
+interface, selection, accounting and limits. A separately generated guest
+verified that the first read left its RAM buffer unchanged, a disk reset and
+two subsequent matching reads succeeded, and the existing persistent option
+still failed on both attempts. Invalid drive selections and duplicate options
+were rejected; source media remained unchanged. All 26 286 integration tests
+passed with the active-profile twin executable SHA-256
+`ef7b5d9cf89fd0cc0eb1a816b5e489ffc34931349370a178c0579267dcc2ff2a`.
+The log and matching twin build manifests are in
+`C:/Repos/.task-temp/boothush-transient-active-twins-20261115-b`.
+
+ClasSICK's independently written disposable diagnostic now offers up to
+three reads with a reset between failures. Its 44 loader cases include
+transient and persistent failures at each track and an intentionally failed
+reset. The actual 286 window image separately recovered from a transient
+failure at each of its three payload reads, and stopped after three injected
+failures in each corresponding persistent case. Commands, guest state,
+image hashes and model limitations are in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+These results do not establish physical BIOS behavior or a production recovery
+and installation procedure.
+
 Reproduce the partial twin build with a new directory:
 
 ```powershell
