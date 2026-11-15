@@ -105,6 +105,10 @@ executable SHA-256
 `3aec7ffc0062d950f8f62088baf5c17ed95c70a9f1737776157a5a38568aa7f8`.
 Build sources, tools and hashes are in
 `C:/Repos/.task-temp/boothush-read-ordinal-active-20261115-a/report.json`.
+A follow-up test also checks that an invalid buffer crossing a 64 KiB
+boundary is refused before the ordinal matcher counts a read; the next
+valid matching read still triggers occurrence one. The 27-test suite passed
+again on the same executable.
 
 ClasSICK used the feature to test each post-write verification read in its
 generated-disk prefix-preflight experiment. Its test and precise limitations

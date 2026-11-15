@@ -225,6 +225,20 @@ class PcAtIntegrationTests(unittest.TestCase):
                                  '--until-post','0x43')
         self.assertEqual((wrong_chs['hard_disk_read_failure']['matched'],
                           wrong_chs['hard_disk_read_failure']['injected']),(0,0))
+        # A crossing buffer is rejected by the model before the ordinal
+        # matcher; the next valid read must still be occurrence one.
+        crossing_program=checked_program((
+            ('31c0 8ec0 bb00ff b80102 b90200 ba8000 cd13', 0x73),
+            ('80fc09', 0x75),
+            ('bb0006 b80102 b90200 ba8000 cd13', 0x73),
+            ('80fc20', 0x75),
+            ('bb0008 b80102 b90200 ba8000 cd13', 0x72),
+        ),0x44)
+        crossing_disk=self.write('ordinal-crossing.img',boot_image(crossing_program,HARD_DISK_SIZE))
+        crossing=self.run_guest('--hard-disk',crossing_disk,'--fail-hard-disk-read-at','0:0:2:1',
+                                '--until-post','0x44')
+        self.assertEqual((crossing['hard_disk_read_failure']['matched'],
+                          crossing['hard_disk_read_failure']['injected']),(2,1))
         for bad in ('0:0:2:0','615:0:1:2','0:0:2','0:0:2:2:1'):
             self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-at',bad,exit_code=2)['status'],'error')
         self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-read','0:0:2',
