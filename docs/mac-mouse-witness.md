@@ -112,6 +112,13 @@ and replay passed. Its exact sources, commands and results are in
 `C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
 These are guest/model results and do not make a physical timing claim.
 
+A later original ClasSICK scratch build serviced SCC motion before VIA/VBL
+bookkeeping, but still failed the 2,048-cycle paired input scenario while
+passing the 4,096-cycle run. Its source identities, exact modeled outcomes
+and limitations are recorded in
+`C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`.
+This does not establish a physical timing limit or a fix.
+
 On 2026-11-15 a separate ClasSICK scratch build coalesced its foreground
 diagnostic snapshots to examine interrupt-exclusion overhead. It and the
 unchanged control still failed the 2,048-cycle modeled input case, while both
