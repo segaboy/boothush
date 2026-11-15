@@ -80,6 +80,14 @@ The `--hard-disk` input is loaded into a private memory copy. Guest fixed-disk w
 
 With a fixed emulator build, ROM, media, cycle-scheduled input and stop condition, guest output can be compared between runs; a wall-clock timeout, changed build or external host input can change the outcome. The bounded 286 witness records steps, filtered byte memory and port events, IRQ acknowledgements and changes to the last exception; it can drop rows after 65,536 events, and firmware-shim operations are not independently traced. See the [README witness contract](../README.md#local-process-api).
 
+ClasSICK's generated fixed-disk diagnostic additionally exercised a bitwise
+CRC-16 payload check and read-failure controls on the 286 model. Its full
+window session schedules keyboard input after a separate modeled readiness
+observation because CRC startup takes longer than the old sum. The exact
+guest, images, emulator identity, tests and limitations are recorded in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+This integration result does not establish a physical BIOS or installation.
+
 ## Hardware references
 
 - System board I/O, timers, interrupt routing, DMA, keyboard controller and CMOS
