@@ -43,6 +43,15 @@ Disk `AH=02h`–`04h` accepts 1–127 sectors and validates CHS. Floppy transfer
 
 For deterministic loader error testing, `--fail-floppy-read C:H:S` requires the `pc286` profile, floppy image and built-in firmware (no `--rom`). It matches the **starting** CHS of every otherwise valid floppy `INT 13h AH=02h` read, including retries, and returns carry set, `AH=20h` (controller failure), `AL=0` and the same last-status value. No bytes are copied on an injected failure. Geometry and buffer errors take precedence. It does not affect fixed disks, verify, direct floppy-controller I/O, custom firmware, or reads that merely span the selected sector. On every run with the option, JSON includes `floppy_read_failure` with the selected `cylinder`, `head`, `sector`, `bios_status` (32), and `injected` count; zero means the selection was never reached on a valid read. The bootstrap's own INT 13h read is included. The original floppy remains unchanged. Injection is disabled unless explicitly requested.
 
+`--fail-hard-disk-read-at C:H:S:N` selects exactly the positive, one-based Nth
+otherwise valid built-in firmware read beginning at that hard-disk CHS. The
+selected read fails once with status 20h and no transfer; later matches can
+succeed. JSON adds `occurrence` and `matched` to `hard_disk_read_failure`;
+`matched` includes valid matching reads before and after the failure. It is
+mutually exclusive with the persistent and first-match read options. As with
+those options, the bootstrap is included, geometry and buffer checks take
+precedence, and this is a deliberate model fault, not physical BIOS evidence.
+
 `--fail-hard-disk-read C:H:S` provides the same starting-CHS failure for a
 valid built-in firmware `INT 13h AH=02h` hard-disk read. It requires `pc286`,
 `--hard-disk` and no `--rom`; the selection must fit the model's 615:4:17

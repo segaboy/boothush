@@ -192,6 +192,47 @@ class PcAtIntegrationTests(unittest.TestCase):
         self.assertEqual(duplicate['status'],'error')
         self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
 
+    def test_hard_disk_read_failure_at_occurrence(self):
+        program = checked_program((
+            ('31c0 8ec0 bb0006 b80102 b90200 ba8000 cd13', 0x72),
+            ('813e00064248', 0x75),
+            ('bb0008 b80102 b90200 ba8000 cd13', 0x73),
+            ('80fc20', 0x75),
+            ('803e000800', 0x75),
+            ('bb000a b80102 b90200 ba8000 cd13', 0x72),
+            ('813e000a4248', 0x75),
+        ), 0x42)
+        image=boot_image(program,HARD_DISK_SIZE);image[512:516]=b'BHAT'
+        disk=self.write('ordinal-read.img',image);before=hashlib.sha256(disk.read_bytes()).hexdigest()
+        result=self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-at','0:0:2:2',
+                              '--until-post','0x42','--inspect','0x600:4','--inspect','0x800:4',
+                              '--inspect','0xa00:4')
+        self.assertEqual(result['hard_disk_read_failure'],
+                         {'cylinder':0,'head':0,'sector':2,'injected':1,'bios_status':32,
+                          'occurrence':2,'matched':3})
+        self.assertEqual([bytes.fromhex(r['bytes']) for r in result['memory_ranges']], [b'BHAT',bytes(4),b'BHAT'])
+        no_trigger_program=checked_program((
+            ('31c0 8ec0 bb0006 b80102 b90200 ba8000 cd13', 0x72),
+            ('bb0008 b80102 b90200 ba8000 cd13', 0x72),
+        ),0x43)
+        no_trigger_image=boot_image(no_trigger_program,HARD_DISK_SIZE);no_trigger_image[512:516]=b'BHAT'
+        no_trigger_disk=self.write('ordinal-not-reached.img',no_trigger_image)
+        no_trigger=self.run_guest('--hard-disk',no_trigger_disk,'--fail-hard-disk-read-at','0:0:2:3',
+                                  '--until-post','0x43')
+        self.assertEqual((no_trigger['hard_disk_read_failure']['matched'],
+                          no_trigger['hard_disk_read_failure']['injected']),(2,0))
+        wrong_chs=self.run_guest('--hard-disk',no_trigger_disk,'--fail-hard-disk-read-at','0:0:3:1',
+                                 '--until-post','0x43')
+        self.assertEqual((wrong_chs['hard_disk_read_failure']['matched'],
+                          wrong_chs['hard_disk_read_failure']['injected']),(0,0))
+        for bad in ('0:0:2:0','615:0:1:2','0:0:2','0:0:2:2:1'):
+            self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-at',bad,exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-read','0:0:2',
+                         '--fail-hard-disk-read-at','0:0:2:2',exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-read-at','0:0:2:2',
+                         '--fail-hard-disk-read-once','0:0:2',exit_code=2)['status'],'error')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
+
     def test_selected_hard_disk_write_failure(self):
         program = bytearray.fromhex('31c0 8ec0 bb007d b80103 b90200 ba8000 cd13 72 00')
         branch = len(program)-1

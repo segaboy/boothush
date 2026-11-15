@@ -60,6 +60,9 @@ For a PC run with scheduled scancodes, `pc_keyboard_input` accounts for
 scheduled delivery, and `pc_keyboard_buffer` snapshots the controller model's
 output queue at stop. These are distinct queues and neither substitutes for
 guest state inspection. See [PC/AT keyboard accounting](pc-at.md).
+For storage experiments the PC profile can fail a selected matching read
+occurrence, allowing preflight and post-write verification to be tested
+separately; see [PC/AT disk fault injection](pc-at.md).
 
 ```powershell
 $exe = 'C:\Repos\boothush\out\windows\boothush.exe'

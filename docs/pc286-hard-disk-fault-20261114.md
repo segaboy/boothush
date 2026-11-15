@@ -96,6 +96,23 @@ linked-session results are in the ClasSICK evidence above. This tests guest
 robustness against a synthetic clobber; BootHush was not changed to claim a
 physical BIOS clobbers the register.
 
+On 2026-11-15 BootHush added an opt-in selected-occurrence read failure so
+the same guest can first read a disk and later fail its verification read at
+the same CHS. A separate original guest verified success, a no-transfer second
+failure and subsequent recovery, plus not-reached, wrong-CHS and invalid or
+duplicate-option cases. All 27 PC286 tests passed with active-profile twin
+executable SHA-256
+`3aec7ffc0062d950f8f62088baf5c17ed95c70a9f1737776157a5a38568aa7f8`.
+Build sources, tools and hashes are in
+`C:/Repos/.task-temp/boothush-read-ordinal-active-20261115-a/report.json`.
+
+ClasSICK used the feature to test each post-write verification read in its
+generated-disk prefix-preflight experiment. Its test and precise limitations
+are in `C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+The port's native-jab title test also passed on this emulator, with its own
+inputs and results in `C:/Repos/.task-temp/nstb-ordinal-regression-20261115-a/report.json`.
+These are model observations, not physical media or game validation.
+
 ClasSICK also used bounded physical-memory inspection with an instrumented
 diagnostic loader to observe its 286 guest's stack watermark at eight window
 checkpoints. The linked evidence above records the separate known-depth

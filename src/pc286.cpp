@@ -152,6 +152,8 @@ struct pc286 final : boothush_i286::Bus {
     uint64_t read_failures = 0;
     bool hard_read_failure_enabled = false;
     bool hard_read_failure_once = false;
+    uint32_t hard_read_failure_at = 0;
+    uint64_t hard_read_matches = 0;
     uint16_t hard_read_failure_cylinder = 0;
     uint8_t hard_read_failure_head = 0, hard_read_failure_sector = 0;
     uint64_t hard_read_failures = 0;
@@ -413,10 +415,14 @@ struct pc286 final : boothush_i286::Bus {
         }
         if (hard && operation == 0x02 && hard_read_failure_enabled &&
             cylinder == hard_read_failure_cylinder && head == hard_read_failure_head &&
-            sector == hard_read_failure_sector && (!hard_read_failure_once || hard_read_failures == 0)) {
-            ++hard_read_failures;
-            disk_status(regs, true, 0x20); // Injected controller failure; no transfer.
-            return;
+            sector == hard_read_failure_sector) {
+            ++hard_read_matches;
+            if ((hard_read_failure_at && hard_read_matches == hard_read_failure_at) ||
+                (!hard_read_failure_at && (!hard_read_failure_once || hard_read_failures == 0))) {
+                ++hard_read_failures;
+                disk_status(regs, true, 0x20); // Injected controller failure; no transfer.
+                return;
+            }
         }
         if (hard && operation == 0x03 && hard_write_failure_enabled &&
             cylinder == hard_write_failure_cylinder && head == hard_write_failure_head &&
@@ -833,6 +839,8 @@ bool pc286_fail_hard_disk_read(pc286 *machine, unsigned cylinder, unsigned head,
     machine->hard_read_failure_head = uint8_t(head);
     machine->hard_read_failure_sector = uint8_t(sector);
     machine->hard_read_failure_once = false;
+    machine->hard_read_failure_at = 0;
+    machine->hard_read_matches = 0;
     machine->hard_read_failures = 0;
     return true;
 }
@@ -841,6 +849,13 @@ bool pc286_fail_hard_disk_read_once(pc286 *machine, unsigned cylinder, unsigned 
 {
     if (!pc286_fail_hard_disk_read(machine, cylinder, head, sector)) return false;
     machine->hard_read_failure_once = true;
+    return true;
+}
+
+bool pc286_fail_hard_disk_read_at(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector, uint32_t occurrence)
+{
+    if (!occurrence || !pc286_fail_hard_disk_read(machine, cylinder, head, sector)) return false;
+    machine->hard_read_failure_at = occurrence;
     return true;
 }
 
@@ -1003,6 +1018,8 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.read_failures = machine->read_failures;
     state.hard_read_failure_enabled = machine->hard_read_failure_enabled;
     state.hard_read_failure_once = machine->hard_read_failure_once;
+    state.hard_read_failure_at = machine->hard_read_failure_at;
+    state.hard_read_matches = machine->hard_read_matches;
     state.hard_read_failure_cylinder = machine->hard_read_failure_cylinder;
     state.hard_read_failure_head = machine->hard_read_failure_head;
     state.hard_read_failure_sector = machine->hard_read_failure_sector;
