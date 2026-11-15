@@ -18,7 +18,8 @@ class MacPortTitleIntegration(unittest.TestCase):
                               '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e',
                               '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd',
                               '71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974',
-                              'b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126'))
+                              'b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126',
+                              '6b302b449e5eab230753cc6604f886628566683d454e5d1b50590f8c061b2db6'))
         for spacing in (1024,256):
             cmd=[str(exe),'--machine','mac128k','--rom',str(rom),'--cycles','4000000',
                  '--timeout-ms','20000','--mouse-dcd-invert','3','--mouse-edge-cycles',str(spacing),
@@ -45,7 +46,8 @@ class MacPortTitleIntegration(unittest.TestCase):
                   '1a367b8eceb9f032e20b679e9224cedf44cde1fc4615720e25710d23f0bd839e',
                   '7121c504159e128d9ec7349213837c5d7b0dbdf8ead594e687334c63e2926ccd',
                   '71de2f909f27348e23c28cb8a18ab869c04f79ee190092d43d8887e3093d2974',
-                  'b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126')
+                  'b4d75d3839e36cdfb5233b521b0a3474256ebe932525f1aa36a16b418884b126',
+                  '6b302b449e5eab230753cc6604f886628566683d454e5d1b50590f8c061b2db6')
         digest=hashlib.sha256(rom.read_bytes()).hexdigest()
         self.assertIn(digest,admitted)
         exe_hash=hashlib.sha256(exe.read_bytes()).hexdigest()
