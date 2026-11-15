@@ -88,6 +88,14 @@ image hashes and model limitations are in
 These results do not establish physical BIOS behavior or a production recovery
 and installation procedure.
 
+The later diagnostic saves its retry counter across read/reset calls. A
+test-only guest overwrote that register immediately after each modeled call;
+the protected version recovered or stopped at the three-attempt bound, while
+the unprotected control exceeded it. The 47-case loader report and full
+linked-session results are in the ClasSICK evidence above. This tests guest
+robustness against a synthetic clobber; BootHush was not changed to claim a
+physical BIOS clobbers the register.
+
 Reproduce the partial twin build with a new directory:
 
 ```powershell
