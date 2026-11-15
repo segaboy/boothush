@@ -152,3 +152,7 @@ boundary, and the first internal counter write occurred at 100017216. Before
 that write the guest's collected SCC A status changed from 12 to 4 across its
 acknowledgment. This ordered model observation does not establish physical
 bus timing, a hardware rate limit, or which component is solely responsible.
+
+A subsequent ClasSICK idle-foreground polling experiment also failed the
+2,048-cycle paired case and passed at 4,096; it was not adopted. Its source,
+model commands and limits are in the linked Windows toolchain evidence.
