@@ -139,6 +139,9 @@ seven-case guest integration run, negative control, inputs and executable
 identity are recorded in `C:/Repos/Not-Super-Tilt-Bro/docs/windows-native-c-evidence.md`.
 This exercises BootHush with another guest; it does not validate physical
 keyboard timing or make the game code a ClasSICK implementation input.
+The port later added a player-two attack-velocity regression and held-key
+resumption case; the same canonical evidence records the changed guest and
+the independent state-oracle mutation control.
 
 ## Display witness
 
