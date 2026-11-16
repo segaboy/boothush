@@ -16,6 +16,11 @@ void CALLBACK input(HWND h,UINT,UINT_PTR timer,DWORD)
 {
     KillTimer(h,timer);
     wchar_t relative[2]{};
+    if(GetEnvironmentVariableW(L"BOOTHUSH_TEST_RELATIVE_ERROR",relative,2)==1 && relative[0]==L'1') {
+        SendMessageW(h,WM_KEYDOWN,VK_F12,1);
+        SendMessageW(h,WM_INPUT,RIM_INPUT,0); // Invalid handle, no physical input.
+        return;
+    }
     if(GetEnvironmentVariableW(L"BOOTHUSH_TEST_RELATIVE",relative,2)==1 && relative[0]==L'1') {
         SendMessageW(h,WM_KEYDOWN,VK_F12,1);
         if(!mac_live_window_inject_relative(test_window,64,0))PostMessageW(h,WM_CLOSE,0,0);

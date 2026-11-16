@@ -28,7 +28,9 @@ def parser():
         p.add_argument('--' + name, type=Path)
     p.add_argument('--seconds', type=int, default=120, help='guest duration, 1-300 seconds')
     p.add_argument('--scale', type=int, choices=range(1, 5), default=2)
-    p.add_argument('--capture-mouse', action='store_true', help='Mac foreground raw mouse capture; click captures, F12 releases')
+    mouse = p.add_mutually_exclusive_group()
+    mouse.add_argument('--capture-mouse', action='store_true', help='Mac foreground raw mouse capture; click captures, F12 releases')
+    mouse.add_argument('--unconfined-mouse', action='store_true', help='Mac relative input with visible/free host pointer; click starts, F12 stops')
     p.add_argument('--record-seconds', type=int, default=0, help='record first N guest seconds at 5 fps')
     p.add_argument('--mouse-edge-cycles', type=int, default=8192)
     p.add_argument('--mouse-dcd-invert', type=int, choices=range(4), default=0)
@@ -48,8 +50,8 @@ def main(argv=None):
         p.error('Mac requires a ROM and does not support hard-disk or ega-font')
     if a.machine == 'pc286' and not (a.rom or a.floppy or a.hard_disk):
         p.error('286 requires a ROM, floppy or hard disk')
-    if a.capture_mouse and a.machine != 'mac128k':
-        p.error('capture-mouse requires mac128k')
+    if (a.capture_mouse or a.unconfined_mouse) and a.machine != 'mac128k':
+        p.error('relative mouse modes require mac128k')
     sources = {'launcher': Path(__file__).resolve(), 'python': Path(sys.executable).resolve()}
     for name in ('emulator', 'rom', 'floppy', 'hard_disk', 'ega_font', 'ffmpeg'):
         value = getattr(a, name)
@@ -75,6 +77,8 @@ def main(argv=None):
         cmd += ['--inspect', value]
     if a.capture_mouse:
         cmd += ['--live-mouse', 'relative']
+    elif a.unconfined_mouse:
+        cmd += ['--live-mouse', 'relative-free']
     if a.machine == 'mac128k':
         cmd += ['--mouse-record', str(run / 'mouse.bhmouse'),
                 '--mouse-edge-cycles', str(a.mouse_edge_cycles),
@@ -99,6 +103,8 @@ def main(argv=None):
             args += ['--inspect', value]
         if a.capture_mouse:
             args += ['--capture-mouse']
+        elif a.unconfined_mouse:
+            args += ['--unconfined-mouse']
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
         # Guard the reviewed inputs before opening a visible window.
         lines = ["$ErrorActionPreference = 'Stop'"]

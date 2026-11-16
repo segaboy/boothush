@@ -181,6 +181,10 @@ if(BUILD_TESTING)
 
     add_executable(boothush_live_keyboard_test tests/test_live_keyboard.cpp)
     add_executable(boothush_mac_live_relative_test tests/test_mac_live_relative.cpp)
+    add_executable(boothush_mac_live_capture_setup_test tests/test_mac_live_capture_setup.cpp)
+    target_include_directories(boothush_mac_live_capture_setup_test PRIVATE src)
+    target_compile_features(boothush_mac_live_capture_setup_test PRIVATE cxx_std_20)
+    target_link_libraries(boothush_mac_live_capture_setup_test PRIVATE user32 gdi32)
     target_link_libraries(boothush_mac_live_relative_test PRIVATE boothush_mac)
     target_link_libraries(boothush_live_keyboard_test PRIVATE boothush_mac)
     add_executable(boothush_live_keyboard_cli_test src/main.c src/pc286.cpp src/video_capture.c src/media_convert.c tests/live_keyboard_cli_window.cpp)
@@ -192,10 +196,12 @@ if(BUILD_TESTING)
     if(MINGW)
         target_link_options(boothush_live_keyboard_test PRIVATE -static)
         target_link_options(boothush_mac_live_relative_test PRIVATE -static)
+        target_link_options(boothush_mac_live_capture_setup_test PRIVATE -static)
         target_link_options(boothush_live_keyboard_cli_test PRIVATE -municode -static)
     endif()
     add_test(NAME live_keyboard COMMAND boothush_live_keyboard_test)
     add_test(NAME mac_live_relative COMMAND boothush_mac_live_relative_test)
+    add_test(NAME mac_live_capture_setup COMMAND boothush_mac_live_capture_setup_test)
     add_test(NAME live_keyboard_cli COMMAND "${CMAKE_COMMAND}" -E env
         "BOOTHUSH_EXE=$<TARGET_FILE:boothush>"
         "BOOTHUSH_LIVE_KEY_TEST_EXE=$<TARGET_FILE:boothush_live_keyboard_cli_test>"
@@ -206,5 +212,5 @@ if(BUILD_TESTING)
         "BOOTHUSH_LIVE_KEY_TEST_EXE=$<TARGET_FILE:boothush_live_keyboard_cli_test>"
         "BOOTHUSH_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}"
         "${Python3_EXECUTABLE}" -B -m unittest discover -v -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p test_human_session.py)
-    set_tests_properties(live_keyboard mac_live_relative live_keyboard_cli human_session PROPERTIES TIMEOUT 30)
+    set_tests_properties(live_keyboard mac_live_relative mac_live_capture_setup live_keyboard_cli human_session PROPERTIES TIMEOUT 30)
 endif()

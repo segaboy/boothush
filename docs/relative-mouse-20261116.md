@@ -44,3 +44,49 @@ without guest omissions or FIFO loss at edge interval 4096. That improvement
 belongs to the distinct ClasSICK change; this host mode alone cannot repair a
 guest that cannot consume the input. Human responsiveness, actual raw delivery
 and complete boundary reach await the next owner-operated round.
+
+## Capture startup failure and explicit unconfined mode
+
+M1R1 owner report: "I clicked in, but the window closed." The session stopped
+after 61.234 seconds with `input_error`, zero captures/packets/samples and
+unchanged inputs; it did not reach its five-minute limit. This round did not
+test guest pointer responsiveness or edges. Original artifacts remain in
+`out/qualification-20261116-a/M1R1-mac`; a separate feedback record was added.
+
+An agent-operated diagnostic window reproduced the failure. New diagnostics
+identified `ClipCursor`, Win32 error 5 (access denied), after raw registration
+and before completed capture. Receipt and guest video:
+`out/qualification-20261116-a/capture-agent-probe-a`. The agent raised the owned
+window and clicked inside its client; a later F12 attempt found it already
+closed. This is agent input, not an owner qualification result.
+
+The explicit `relative-free` CLI mode (`--unconfined-mouse` launcher) registers
+foreground relative input without querying/changing cursor confinement or
+hiding the host pointer. It never silently replaces confined mode and makes
+no desktop permission change. The Windows pointer remains free and visible;
+F12 stops input, focus loss releases it, and an in-window held primary press
+uses ordinary window capture for drag release. Click outside changes focus.
+Precise `relative_mouse_error` operation/code and `relative_mouse_mode` fields
+now distinguish failure and configuration. Inactive clicks/shortcuts are ignored.
+
+The published Windows [ClipCursor contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-clipcursor)
+documents its window-station access requirement. The
+[SetCapture contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcapture)
+defines ordinary foreground button capture and loss to another window.
+Only API contracts were consulted; no implementation/sample was imported.
+
+Source-matched active-profile twins have SHA-256
+`5d86fb1bec512cf8ea965437004ce33914dcb00c591e994f3497740745e8c4bc`.
+Build and validation: `C:/Repos/.task-temp/boothush-relative-free-20261116-a/`.
+The production visible-setup branches are tested with local API fakes for
+every setup failure, exact error preservation, registration rollback on denied
+clipping, normal cleanup, no confinement/hiding in free mode, and ignored
+inactive input. Three existing native live-window tests and six focused Python
+modules pass, including both modes' exact mouse trace replay and CLI error
+reporting. These tests are hidden and do not manipulate desktop input.
+
+The unconfined agent probe `capture-agent-probe-b` reached its 120-second
+limit with zero errors and zero input. UI inspection timed out before any
+agent action; this is only an idle launch result, not a successful capture
+or human test. M1R2 will separately test actual input with the unchanged
+enlarged-FIFO Mac ROM. Physical/raw-device behavior and human feel remain open.

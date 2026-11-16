@@ -12,6 +12,20 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/run_human_session.py'
 
 
 class HumanPlanTests(BootHushTestCase):
+    def test_unconfined_mode_is_explicit_and_mutually_exclusive(self):
+        out = self.scratch / 'free-plan'
+        cmd = [sys.executable, '-B', str(SCRIPT), '--emulator', str(self.exe), '--machine', 'mac128k',
+               '--rom', str(self.rom), '--output', str(out), '--prepare-only', '--unconfined-mouse']
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        plan = json.loads((out/'plan.json').read_text())
+        i = plan['command'].index('--live-mouse')
+        self.assertEqual(plan['command'][i+1], 'relative-free')
+        self.assertIn('--unconfined-mouse', (out/'launch.ps1').read_text())
+        for extra in (['--capture-mouse'], ['--machine','pc286']):
+            r = subprocess.run(cmd+extra, capture_output=True, text=True, timeout=10)
+            self.assertEqual(r.returncode, 2, r.stderr)
+
     def test_preparation_does_not_run_and_refuses_overwrite(self):
         out = self.scratch / "plan with 'quote"
         cmd = [sys.executable, '-B', str(SCRIPT), '--emulator', str(self.exe), '--machine', 'mac128k',

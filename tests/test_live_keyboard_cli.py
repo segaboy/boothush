@@ -12,19 +12,36 @@ from test_mac_keyboard_integration import (make_keyboard_rom,move_byte,exchange,
 @unittest.skipUnless(os.environ.get('BOOTHUSH_LIVE_KEY_TEST_EXE'),'hidden live-key CLI binary not supplied')
 class LiveKeyTests(BootHushTestCase):
     def test_relative_mouse_reaches_record_and_replay(self):
-        trace=self.scratch/'relative.bhmouse';frame=self.scratch/'relative.pbm'
+        for mode in ('relative','relative-free'):
+            with self.subTest(mode=mode):
+                self.check_relative_replay(mode)
+
+    def check_relative_replay(self,mode):
+        trace=self.scratch/(mode+'.bhmouse');frame=self.scratch/(mode+'.pbm')
         env=os.environ.copy();env['BOOTHUSH_TEST_RELATIVE']='1'
         cmd=[env['BOOTHUSH_LIVE_KEY_TEST_EXE'],'--machine','mac128k','--rom',str(self.rom),
-             '--live','1','--live-mouse','relative','--mouse-record',str(trace),'--frame',str(frame),
+             '--live','1','--live-mouse',mode,'--mouse-record',str(trace),'--frame',str(frame),
              '--cycles','20000000','--timeout-ms','5000','--inspect','0xb00:4']
         r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         self.assertEqual(r.returncode,0,(r.stdout,r.stderr));data=json.loads(r.stdout)
         self.assertEqual(data['relative_mouse'],{'packets':1,'captures':1,'releases':1,'captured_at_stop':False})
+        self.assertEqual(data['relative_mouse_mode'],'unconfined' if mode=='relative-free' else 'confined')
         self.assertEqual(data['mouse'],{'samples':1,'steps':128,'pending':0})
         self.assertEqual(list(map(int,trace.read_text().splitlines()[1].split()))[1:],[64,0,0])
-        replay_frame=self.scratch/'replay.pbm'
+        replay_frame=self.scratch/(mode+'-replay.pbm')
         replay=self.boot('--mouse-replay',trace,'--frame',replay_frame,'--inspect','0xb00:4',cycles=20000000,timeout_ms=5000)
         self.assertEqual(replay['memory'],data['memory']);self.assertEqual(frame.read_bytes(),replay_frame.read_bytes())
+
+    def test_raw_input_error_reports_operation_and_code(self):
+        env=os.environ.copy();env['BOOTHUSH_TEST_RELATIVE_ERROR']='1'
+        cmd=[env['BOOTHUSH_LIVE_KEY_TEST_EXE'],'--machine','mac128k','--rom',str(self.rom),
+             '--live','1','--live-mouse','relative-free','--cycles','20000000','--timeout-ms','5000']
+        r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(r.returncode,1,(r.stdout,r.stderr));data=json.loads(r.stdout)
+        self.assertEqual(data['status'],'input_error');self.assertEqual(data['error'],'GetRawInputData')
+        self.assertEqual(data['relative_mouse_error']['operation'],'GetRawInputData')
+        self.assertNotEqual(data['relative_mouse_error']['win32_error'],0)
+        self.assertEqual(data['relative_mouse']['captures'],1);self.assertEqual(data['relative_mouse']['releases'],1)
 
     def test_keys_reach_both_guests_and_focus_releases_are_recorded(self):
         for machine in ('mac128k','pc286'):

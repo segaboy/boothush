@@ -31,8 +31,22 @@ meaning. Absolute-coordinate raw devices are currently rejected with an explicit
 The previous clip rectangle is restored on release if BootHush still owns it.
 The default `window` mode and headless event/replay formats remain unchanged.
 
+If confinement is unavailable, select **`--unconfined-mouse`** instead (CLI:
+`--live-mouse relative-free`). This is a separate explicit mode, never an
+automatic fallback. The host pointer remains visible and can leave BootHush;
+raw motion still drives the guest while BootHush is active. Aim with the guest
+crosshair. Click inside to start; F12 stops input so you can reposition the
+Windows pointer before clicking inside again. Clicking another application
+changes focus and releases guest input. Only an in-window primary press starts
+a guest drag; ordinary window capture retains its release when dragged outside.
+This mode never calls cursor confinement APIs or hides the host cursor.
+The two launcher mouse options are mutually exclusive.
+
 The `relative_mouse` JSON object records raw packet count, captures, releases
 and whether capture was active at the final guest boundary before cleanup.
+`relative_mouse_mode` distinguishes `confined` and `unconfined`. Failure adds
+`relative_mouse_error` with the specific operation and Win32 error code;
+inactive clicks/shortcuts are ignored, not reported as API failures.
 Accepted scaled deltas enter the ordinary quadrature bridge and mouse trace;
 this does not bypass the guest's driver or guarantee its processing rate.
 The [relative-mouse receipt](relative-mouse-20261116.md) records the first

@@ -13,6 +13,9 @@ reach. [Relative mouse capture](relative-mouse-20261116.md) adds an explicit
 foreground raw-input path with F12 release; ClasSICK separately experiments
 with a larger acquisition FIFO. The original human failure is retained and
 neither change is a human pass until retested.
+The next human round found confinement startup failure (`ClipCursor`, error 5).
+The same receipt records the explicit `relative-free` mode for hosts where
+confinement is unavailable, precise API diagnostics and pending human retest.
 
 Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. The separate experimental [NES target](nes.md) uses instruction-bounded `--steps`, two scheduled controllers and stopped CPU/PPU/OAM observations for porting research. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
 

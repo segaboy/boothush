@@ -27,13 +27,17 @@ typedef enum {
 } mac_live_status;
 
 typedef struct {
-    bool enabled, captured;
+    bool enabled, captured, unconfined;
     uint64_t packets;
     unsigned captures, releases;
+    const char *failure;
+    uint32_t win32_error;
 } mac_live_pointer_state;
 
 /* Optional foreground relative mouse capture. F12 releases; click recaptures. */
 bool mac_live_window_relative_mode(mac_live_window *window,bool enabled);
+/* Explicit unconfined mode keeps the host pointer visible and never clips it. */
+bool mac_live_window_relative_options(mac_live_window *window,bool enabled,bool confine);
 mac_live_pointer_state mac_live_window_pointer_state(const mac_live_window *window);
 /* Hidden-test counterpart to a relative RAWMOUSE packet; never global input. */
 bool mac_live_window_inject_relative(mac_live_window *window,int32_t dx,int32_t dy);

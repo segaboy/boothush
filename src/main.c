@@ -132,7 +132,7 @@ struct request {
     bool stop_at_post;
     uint32_t target_post;
     uint32_t live_scale;
-    bool live_mouse_set, live_mouse_relative;
+    bool live_mouse_set, live_mouse_relative, live_mouse_unconfined;
     uint32_t mouse_edge_cycles;
     uint32_t mouse_vbl_guard;
     uint32_t mouse_witness_first;
@@ -525,8 +525,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
             request->live_scale = fields[0];
         } else if (wcscmp(option,L"--live-mouse")==0 && !request->live_mouse_set) {
-            if(wcscmp(value,L"relative") && wcscmp(value,L"window"))return "live-mouse requires relative or window";
-            request->live_mouse_set=true;request->live_mouse_relative=wcscmp(value,L"relative")==0;
+            if(wcscmp(value,L"relative") && wcscmp(value,L"relative-free") && wcscmp(value,L"window"))return "live-mouse requires relative, relative-free or window";
+            request->live_mouse_set=true;request->live_mouse_relative=wcscmp(value,L"window")!=0;
+            request->live_mouse_unconfined=wcscmp(value,L"relative-free")==0;
         } else if (wcscmp(option, L"--mouse-record") == 0 && request->mouse_record_path == NULL) {
             request->mouse_record_path = value;
         } else if (wcscmp(option, L"--live-key-log") == 0 && request->live_key_log_path == NULL) {
@@ -1163,7 +1164,7 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         if (mouse->window == NULL) {
             return "cannot create the live Mac window";
         }
-        if(request->live_mouse_relative && !mac_live_window_relative_mode(mouse->window,true))return "cannot enable relative mouse capture";
+        if(request->live_mouse_relative && !mac_live_window_relative_options(mouse->window,true,!request->live_mouse_unconfined))return "cannot enable relative mouse capture";
     }
     if (request->window_input) {
         mouse->injected_window = true;
@@ -1369,6 +1370,9 @@ static void print_result(const char *status, enum machine_kind machine,
                mouse->focus_losses,mouse->pending_keys,mouse->key_log_count);
         if(mouse->request->live_mouse_relative)printf(",\"relative_mouse\":{\"packets\":%" PRIu64 ",\"captures\":%u,\"releases\":%u,\"captured_at_stop\":%s}",
             mouse->pointer_state.packets,mouse->pointer_state.captures,mouse->pointer_state.releases,mouse->pointer_state.captured?"true":"false");
+        if(mouse->pointer_state.failure)printf(",\"relative_mouse_error\":{\"operation\":\"%s\",\"win32_error\":%" PRIu32 "}",
+            mouse->pointer_state.failure,mouse->pointer_state.win32_error);
+        if(mouse->request->live_mouse_relative)printf(",\"relative_mouse_mode\":\"%s\"",mouse->request->live_mouse_unconfined?"unconfined":"confined");
     }
     if (machine == MACHINE_PC286 && mouse != NULL && mouse->scheduled != 0) {
         const size_t rejected = mouse->scheduled_rejected ? 1u : 0u;
@@ -1666,7 +1670,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                 if (status == MAC_LIVE_INPUT_OVERFLOW) {
                     return (struct run_result){"input_overflow", "live input or recording queue is full", 1};
                 }
-                if(status==MAC_LIVE_INPUT_ERROR)return (struct run_result){"input_error","relative mouse capture/read failed or device is absolute",1};
+                if(status==MAC_LIVE_INPUT_ERROR)return (struct run_result){"input_error",mac_live_window_pointer_state(mouse->window).failure,1};
             }
             live_target = (uint64_t)((double)elapsed * (machine->mac?MAC_CLOCK_HZ:6000000) / (double)frequency.QuadPart);
             if (live_target <= state.cycles) {
@@ -2365,7 +2369,8 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
              "Human input: --live SCALE (Mac mouse/keyboard or 286 keyboard); --live-key-log NEW_PATH\n"
-             "Mac capture: --live-mouse relative (click captures; F12 releases) or window (default)\n"
+             "Mac capture: --live-mouse relative (confined), relative-free (visible/free host pointer), or window (default)\n"
+             "             Click starts relative input; F12 stops it\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
