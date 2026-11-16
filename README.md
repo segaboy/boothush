@@ -95,7 +95,8 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--mouse-phase CYCLE:X:Y` | Macintosh only. Set raw two-bit quadrature phases. Bit 0 drives SCC DCD and bit 1 drives VIA PB4/PB5. Default phases are `2:2`. |
 | `--mouse-motion CYCLE:DX:DY` | Macintosh only. Queue signed pixel deltas through the same paced quadrature bridge used for live input. Positive X is right and positive Y is down. Scheduled buttons join the same queue. |
 | `--window-mouse CYCLE:X:Y:ACTION` | Macintosh only. Deliver a logical mouse event to an invisible owned window at a guest cycle. Actions are 0 for unpressed movement, 1 for primary press, 2 for held movement, and 3 for release. X is 0–511 and Y is 0–341. Events must be in cycle order. |
-| `--live SCALE` | Macintosh only. Open a native mouse window at integer scale 1–4 and pace the guest to its nominal 7.8336 MHz clock. |
+| `--live SCALE` | Open an opt-in native window at integer scale 1–4: Mac mouse and keyboard (7.8336 MHz), or 286 keyboard and EGA display (6 MHz). See [human testing](docs/human-testing.md) for supported keys and evidence. |
+| `--live-key-log PATH` | With `--live`, save accepted keyboard transitions and guest cycles to a new `BHLIVEKEY1` file. This is not a human-verification claim. |
 | `--mouse-record PATH` | With `--live`, `--window-mouse`, or `--mouse-motion`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |
@@ -149,7 +150,9 @@ queue at stop independently of `--pc-witness`; see [PC/AT keyboard accounting](d
 
 The 286 witness begins with `BHPC286W1 STOP COUNT DROPPED` and a column header. Each row gives cycle, CS, IP, physical PC, kind, address, value and width. `step` marks a CPU step, including prefixes and REP iterations. Filtered `read`/`write` are byte bus accesses, `in`/`out` are port operations, `irq` is an acknowledged hardware interrupt vector, and `exception` is a change in the CPU's last-exception value. Repeated identical exceptions may therefore be omitted. Software interrupt instructions and firmware-shim memory operations are not separately traced. Accesses within a CPU step share the step's starting cycle and instruction location. A maximum of 65,536 events is retained and further events are counted in `DROPPED`. A cycle filter is recommended for long runs. This is emulator execution evidence, and does not establish physical-hardware timing.
 
-## Live Mac mouse tests
+## Human testing and live Mac mouse tests
+
+Use [scripts/run_human_session.py](scripts/run_human_session.py) for a bounded Mac or 286 session with input logs, a final screenshot, optional video, image hashes, and a human observation template. `--prepare-only` writes a hash-checked `launch.ps1` without opening a window. The [human testing guide](docs/human-testing.md) documents both profiles, controls, limits, and qualification evidence.
 
 For the exact local ClasSICK 0.97 fixture, automated pass criteria, and diagnostic addresses, see the [ClasSICK 0.97 Mac mouse runbook](docs/classick-097-mouse.md).
 

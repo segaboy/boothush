@@ -32,4 +32,6 @@ The current Windows implementation provides `mac128k` and `pc286` machine profil
 
 As of the owner's 2026-11-14 direction, ClasSICK's immediate paired target is Mac128K and native 286, with x64 work paused. Investigate Mac mouse behavior and support the 286 PC/AT boot, EGA, input and storage work needed to test that pair headlessly. The x64 software probe and other partial foundations remain preserved, but they do not boot a guest and are not the current workstream. See the [ClasSICK integration guide](classick-integration.md).
 
+The owner's 2026-11-16 direction also requires human testing where needed or requested. The [human session workflow](human-testing.md) provides an explicitly selected native Mac mouse/keyboard window or 286 keyboard/EGA window, with bounded execution and retained evidence. Automated tests remain hidden. A human session complements scripted checks; its observations and disposition must be recorded separately before it can support release qualification.
+
 Future support for additional source and target platforms, including the Super Nintendo and 3DO example, will need its own scoped machine profiles, test fixtures, toolchain integration, and comparison rules. Windows is the current host; support for other host operating systems is a future goal rather than a current capability.

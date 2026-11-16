@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "mac128k.h"
+#include "live_window.h"
 
 #ifdef __cplusplus
 extern "C" {

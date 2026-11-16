@@ -47,7 +47,9 @@ class MacLiveCliTests(BootHushTestCase):
                 "--mouse-replay", trace, "--inspect", "0xb00:8", "--frame", replay_frame,
                 cycles=80_000_000, timeout_ms=5000,
             )
-            self.assertEqual(replay, dict(report, status="cycle_limit"))
+            expected = dict(report, status="cycle_limit")
+            self.assertFalse(expected.pop("live_session")["human_verified"])
+            self.assertEqual(replay, expected)
             self.assertEqual(replay_frame.read_bytes(), live_frame.read_bytes())
 
 

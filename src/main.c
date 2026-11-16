@@ -93,6 +93,7 @@ struct request {
     const wchar_t *video_path;
     const wchar_t *cancel_event;
     const wchar_t *mouse_record_path;
+    const wchar_t *live_key_log_path;
     const wchar_t *mouse_replay_path;
     const wchar_t *mouse_witness_path;
     const wchar_t *keyboard_witness_path;
@@ -172,6 +173,14 @@ struct mouse_session {
     const struct request *request;
     mac_mouse *bridge;
     mac_live_window *window;
+    uint8_t *live_rgb;
+    bh_live_key pending_key;
+    bool key_pending;
+    size_t pending_keys;
+    uint64_t live_keys,live_key_bytes,live_focus_releases;
+    unsigned focus_losses;
+    struct { uint64_t cycle; bh_live_key key; } key_log[4096];
+    size_t key_log_count;
     mac_mouse_trace *record;
     mac_mouse_trace *replay;
     size_t replay_index;
@@ -515,6 +524,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->live_scale = fields[0];
         } else if (wcscmp(option, L"--mouse-record") == 0 && request->mouse_record_path == NULL) {
             request->mouse_record_path = value;
+        } else if (wcscmp(option, L"--live-key-log") == 0 && request->live_key_log_path == NULL) {
+            request->live_key_log_path = value;
         } else if (wcscmp(option, L"--mouse-replay") == 0 && request->mouse_replay_path == NULL) {
             request->mouse_replay_path = value;
         } else if (wcscmp(option, L"--mouse-witness") == 0 && request->mouse_witness_path == NULL) {
@@ -708,12 +719,13 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         request->input_events[request->input_event_count - 1].cycle >= request->cycle_limit) {
         return "input events must precede the cycle limit";
     }
-    const bool mouse_bridge = request->live_scale || request->relative_motion || request->mouse_replay_path || request->window_input;
+    if(request->live_key_log_path && !request->live_scale)return "live-key-log requires live input";
+    const bool mouse_bridge = (request->live_scale && request->machine==MACHINE_MAC128K) || request->relative_motion || request->mouse_replay_path || request->window_input;
     const bool mouse_settings = request->mouse_edge_cycles || request->mouse_invert_set ||
                                 request->mouse_guard_set;
     if (request->machine != MACHINE_MAC128K &&
         (mouse_bridge || request->mouse_record_path || mouse_settings)) {
-        return "live window, mouse recording, replay and motion settings require mac128k";
+        return "mouse recording, replay and motion settings require mac128k";
     }
     if (request->mouse_witness_path != NULL && request->machine != MACHINE_MAC128K) {
         return "mouse-witness requires mac128k";
@@ -1100,6 +1112,12 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
 {
     mouse->readiness_requested = request->input_after.width != 0;
     mouse->scheduled = request->input_event_count;
+    if(request->machine==MACHINE_PC286 && request->live_scale) {
+        mouse->window=bh_live_window_create(BH_LIVE_PC286,request->live_scale,true);
+        mouse->live_rgb=malloc(PC286_FRAME_SIZE);
+        if(!mouse->window || !mouse->live_rgb)return "cannot create the live 286 window";
+        return NULL;
+    }
     if (!request->live_scale && !request->relative_motion && !request->mouse_replay_path && !request->window_input) {
         return NULL;
     }
@@ -1158,6 +1176,7 @@ static void close_mouse_session(struct mouse_session *mouse)
     mac_mouse_trace_destroy(mouse->record);
     mac_mouse_trace_destroy(mouse->replay);
     mac_mouse_destroy(mouse->bridge);
+    free(mouse->live_rgb);
 }
 
 static void note_mouse_guard(struct mouse_session *mouse)
@@ -1335,6 +1354,13 @@ static void print_result(const char *status, enum machine_kind machine,
         if (mouse->ready) { printf(",\"ready_cycle\":%" PRIu64, mouse->ready_cycle); }
         printf(",\"scheduled\":%zu,\"accepted\":%zu}", mouse->scheduled, mouse->scheduled_accepted);
     }
+    if(mouse && mouse->request && mouse->request->live_scale) {
+        printf(",\"live_session\":{\"input_source\":\"host_window_messages\",\"human_verified\":false,\"scheduled_events\":%zu,"
+               "\"keys_accepted\":%" PRIu64 ",\"key_bytes\":%" PRIu64 ",\"focus_releases\":%" PRIu64
+               ",\"focus_losses\":%u,\"pending_keys\":%zu,\"logged_keys\":%zu}",
+               mouse->scheduled,mouse->live_keys,mouse->live_key_bytes,mouse->live_focus_releases,
+               mouse->focus_losses,mouse->pending_keys,mouse->key_log_count);
+    }
     if (machine == MACHINE_PC286 && mouse != NULL && mouse->scheduled != 0) {
         const size_t rejected = mouse->scheduled_rejected ? 1u : 0u;
         printf(",\"pc_keyboard_input\":{\"scheduled\":%zu,\"accepted\":%zu,\"rejected\":%zu,\"pending\":%zu}",
@@ -1445,9 +1471,11 @@ static mac_live_status refresh_live(struct machine *machine, struct mouse_sessio
     if (status == MAC_LIVE_INPUT_OVERFLOW) {
         return status;
     }
-    if (status == MAC_LIVE_RUNNING && state.vbl != *presented_vbl) {
-        mac_live_window_present(mouse->window, mac128k_frame(machine->mac));
-        *presented_vbl = state.vbl;
+    const uint64_t frame_index=machine->mac?state.vbl:state.cycles/120000;
+    if (status == MAC_LIVE_RUNNING && frame_index != *presented_vbl) {
+        if(machine->mac)mac_live_window_present(mouse->window, mac128k_frame(machine->mac));
+        else {pc286_frame_rgb(machine->pc,mouse->live_rgb);bh_live_window_present_rgb(mouse->window,mouse->live_rgb);}
+        *presented_vbl = frame_index;
     }
     mac_live_event event;
     mouse->source = 4;
@@ -1457,7 +1485,48 @@ static mac_live_status refresh_live(struct machine *machine, struct mouse_sessio
             return MAC_LIVE_INPUT_OVERFLOW;
         }
     }
+    for(;;) {
+        if(!mouse->key_pending)mouse->key_pending=bh_live_window_next_key(mouse->window,&mouse->pending_key);
+        if(!mouse->key_pending)break;
+        const bh_live_key key=mouse->pending_key;
+        if(mouse->request->live_key_log_path && mouse->key_log_count==4096)return MAC_LIVE_INPUT_OVERFLOW;
+        unsigned bytes=1;
+        if(machine->pc) {
+            uint8_t packet[3];bytes=0;
+            if(key.extended)packet[bytes++]=0xe0;
+            if(!key.pressed)packet[bytes++]=0xf0;
+            packet[bytes++]=key.code;
+            const pc286_state current=pc286_get_state(machine->pc);
+            if(current.keyboard_output_capacity-current.keyboard_output_queued<bytes)break;
+            for(unsigned i=0;i<bytes;++i)if(!pc286_inject_scancode(machine->pc,packet[i]))return MAC_LIVE_INPUT_OVERFLOW;
+        } else {
+            mac128k_keyboard_input_due(machine->mac,state.cycles,key.code,key.pressed);
+            if(!mac128k_inject_key(machine->mac,key.code,key.pressed))return MAC_LIVE_INPUT_OVERFLOW;
+        }
+        if(mouse->request->live_key_log_path) {
+            mouse->key_log[mouse->key_log_count].cycle=state.cycles;
+            mouse->key_log[mouse->key_log_count++].key=key;
+        }
+        ++mouse->live_keys;mouse->live_key_bytes+=bytes;mouse->live_focus_releases+=key.focus_release;
+        mouse->key_pending=false;
+    }
+    mouse->pending_keys=bh_live_window_pending_keys(mouse->window)+(mouse->key_pending?1:0);
+    mouse->focus_losses=bh_live_window_focus_losses(mouse->window);
     return status;
+}
+
+static bool write_live_keys(const struct request *request,const struct mouse_session *mouse,uint64_t stop)
+{
+    const size_t capacity=256+mouse->key_log_count*96;char *text=malloc(capacity);if(!text)return false;
+    size_t used=(size_t)snprintf(text,capacity,"BHLIVEKEY1 %s %" PRIu64 " %zu %zu\ncycle code pressed extended repeated focus_release\n",
+                              request->machine==MACHINE_MAC128K?"mac128k":"pc286",stop,mouse->key_log_count,mouse->pending_keys);
+    for(size_t i=0;i<mouse->key_log_count;++i) {
+        const bh_live_key k=mouse->key_log[i].key;
+        used+=(size_t)snprintf(text+used,capacity-used,"%" PRIu64 " %u %u %u %u %u\n",mouse->key_log[i].cycle,
+                              k.code,k.pressed,k.extended,k.repeated,k.focus_release);
+    }
+    const bool ok=used<capacity && write_new_file(request->live_key_log_path,NULL,0,(const uint8_t*)text,(DWORD)used);
+    free(text);return ok;
 }
 
 static uint32_t slice_before(uint32_t slice, uint64_t cycle, uint64_t deadline)
@@ -1502,7 +1571,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
     if (reaches_recorded_end) {
         cycle_limit = mac_mouse_trace_stop_cycle(mouse->replay);
     }
-    if (machine->pc != NULL && request->input_event_count != 0) {
+    if (machine->pc != NULL && (request->input_event_count != 0 || request->live_scale)) {
         pc286_expect_input(machine->pc, true);
     }
     struct machine_state state = get_state(machine);
@@ -1586,10 +1655,10 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                     return (struct run_result){"closed", NULL, use_predicate ? 1 : 0};
                 }
                 if (status == MAC_LIVE_INPUT_OVERFLOW) {
-                    return (struct run_result){"input_overflow", "live mouse input or recording queue is full", 1};
+                    return (struct run_result){"input_overflow", "live input or recording queue is full", 1};
                 }
             }
-            live_target = (uint64_t)((double)elapsed * MAC_CLOCK_HZ / (double)frequency.QuadPart);
+            live_target = (uint64_t)((double)elapsed * (machine->mac?MAC_CLOCK_HZ:6000000) / (double)frequency.QuadPart);
             if (live_target <= state.cycles) {
                 const DWORD wait = MsgWaitForMultipleObjectsEx(0, NULL, 1, QS_ALLINPUT, 0);
                 if (wait == WAIT_FAILED) {
@@ -2285,6 +2354,7 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
+             "Human input: --live SCALE (Mac mouse/keyboard or 286 keyboard); --live-key-log NEW_PATH\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
@@ -2409,6 +2479,8 @@ int wmain(int argc, wchar_t **argv)
     if (video != NULL && !video_finish(video, video->failed))
         result = (struct run_result){"error", "cannot close requested video", 2};
     if (mouse.window != NULL) {
+        mouse.pending_keys=bh_live_window_pending_keys(mouse.window)+(mouse.key_pending?1:0);
+        mouse.focus_losses=bh_live_window_focus_losses(mouse.window);
         mac_live_window_destroy(mouse.window);
         mouse.window = NULL;
     }
@@ -2416,6 +2488,8 @@ int wmain(int argc, wchar_t **argv)
         CloseHandle(cancel_event);
     }
     const struct machine_state state = get_state(&machine);
+    if(request.live_key_log_path && !write_live_keys(&request,&mouse,state.cycles))
+        result=(struct run_result){"error","cannot create or write live keyboard log",2};
     uint8_t bytes[MAX_INSPECT_TOTAL];
     const uint8_t *inspection_bytes = NULL;
     size_t offset = 0;

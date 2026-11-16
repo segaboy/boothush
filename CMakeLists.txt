@@ -178,4 +178,29 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME mac_live COMMAND boothush_mac_live_test)
     set_tests_properties(mac_live PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+    add_executable(boothush_live_keyboard_test tests/test_live_keyboard.cpp)
+    target_link_libraries(boothush_live_keyboard_test PRIVATE boothush_mac)
+    add_executable(boothush_live_keyboard_cli_test src/main.c src/pc286.cpp src/video_capture.c src/media_convert.c tests/live_keyboard_cli_window.cpp)
+    target_compile_features(boothush_live_keyboard_cli_test PRIVATE c_std_11 cxx_std_20)
+    target_compile_definitions(boothush_live_keyboard_cli_test PRIVATE
+        "$<$<COMPILE_LANGUAGE:C>:mac_live_window_create=boothush_key_test_mac_create>"
+        "$<$<COMPILE_LANGUAGE:C>:bh_live_window_create=boothush_key_test_create>")
+    target_link_libraries(boothush_live_keyboard_cli_test PRIVATE boothush_mac i286 boothush_x64_media boothush_nes_core)
+    if(MINGW)
+        target_link_options(boothush_live_keyboard_test PRIVATE -static)
+        target_link_options(boothush_live_keyboard_cli_test PRIVATE -municode -static)
+    endif()
+    add_test(NAME live_keyboard COMMAND boothush_live_keyboard_test)
+    add_test(NAME live_keyboard_cli COMMAND "${CMAKE_COMMAND}" -E env
+        "BOOTHUSH_EXE=$<TARGET_FILE:boothush>"
+        "BOOTHUSH_LIVE_KEY_TEST_EXE=$<TARGET_FILE:boothush_live_keyboard_cli_test>"
+        "BOOTHUSH_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}"
+        "${Python3_EXECUTABLE}" -B -m unittest discover -v -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p test_live_keyboard_cli.py)
+    add_test(NAME human_session COMMAND "${CMAKE_COMMAND}" -E env
+        "BOOTHUSH_EXE=$<TARGET_FILE:boothush>"
+        "BOOTHUSH_LIVE_KEY_TEST_EXE=$<TARGET_FILE:boothush_live_keyboard_cli_test>"
+        "BOOTHUSH_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}"
+        "${Python3_EXECUTABLE}" -B -m unittest discover -v -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p test_human_session.py)
+    set_tests_properties(live_keyboard live_keyboard_cli human_session PROPERTIES TIMEOUT 30)
 endif()
