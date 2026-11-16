@@ -123,3 +123,11 @@ paired state/pixel comparison and excessive-burst recovery. Its canonical
 guided-human receipt records the failed smaller-buffer controls and new ROM
 identity. This is not a universal input-rate or latency guarantee. M1R3 starts
 at 400 percent with that candidate; human sensitivity remains pending.
+
+The subsequent M1R4 recording at 300 percent and 2x zoom is analyzed in the
+[ClasSICK guided receipt](../../ClasSICK-0.97/docs/development/guided-human-qualification-20261116.md#m1r4-recording-and-axis-investigation).
+Its actual video frames match replay; equal-distance tests retain exact
+movement but expose a small timing-dependent completion difference. Raw
+device counts and the Windows pointer were not recorded, so this does not
+resolve the owner's perceived axis asymmetry. No gain or code change follows
+from that observation alone. Human responsiveness remains open.
