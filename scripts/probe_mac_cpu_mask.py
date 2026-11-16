@@ -60,6 +60,7 @@ def main():
     p.add_argument('--guard', type=int, default=4096)
     p.add_argument('--inspect', default='0xb00:1024')
     p.add_argument('--motion', default='32:0')
+    p.add_argument('--cpu-steps', action='store_true', help='also retain instruction boundaries; use a short trace range')
     a = p.parse_args()
     if not 1000 <= a.input_cycle < a.trace_last <= a.stop_cycle <= 1000000000:
         p.error('require 1000 <= input < trace-last <= stop <= 1000000000')
@@ -84,6 +85,8 @@ def main():
             if traced:
                 cmd += ['--mouse-witness', str(witness), '--mouse-witness-detail', '1',
                         '--mouse-witness-range', f'{a.input_cycle-1000}:{a.trace_last}']
+                if a.cpu_steps:
+                    cmd += ['--mouse-witness-cpu', '1']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=35,
                                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if result.returncode:

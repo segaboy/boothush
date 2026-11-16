@@ -209,6 +209,48 @@ class MacMouseWitnessCliTests(BootHushTestCase):
                          [(8, 7), (7, 0), (0, 2), (2, 7), (7, 0)])
         self.assertEqual([r['value'] for r in rows if r['kind'] == 'irq_accept'], [2])
 
+    def test_cpu_steps_are_opt_in_filtered_and_observation_only(self):
+        self.rom.write_bytes(make_rom(bytes.fromhex('7001 5280 4e71 60fe')))
+        plain = self.boot(cycles=2000)
+        path = self.scratch / 'cpu-steps.txt'
+        result = self.boot('--mouse-witness', path, '--mouse-witness-detail', '1',
+                           '--mouse-witness-cpu', '1', cycles=2000)
+        self.assertEqual(result, plain)
+        _, rows = self.read_detail(path)
+        steps = [r for r in rows if r['kind'] == 'cpu_step']
+        self.assertEqual([r['address'] for r in steps[:4]], [0x400104, 0x400106, 0x400108, 0x40010a])
+        self.assertEqual([b['cycle']-a['cycle'] for a,b in zip(steps[:3],steps[1:4])], [4, 8, 4])
+        self.assertTrue(all(r['value'] == 7 for r in steps))
+        self.assertTrue(all(r['address'] == 0x40010a for r in steps[3:]))
+        filtered = self.scratch / 'cpu-filtered.txt'
+        first, last = steps[4]['cycle'], steps[7]['cycle']
+        self.assertEqual(self.boot('--mouse-witness', filtered, '--mouse-witness-detail', '1',
+                                  '--mouse-witness-cpu', '1', '--mouse-witness-range',
+                                  f'{first}:{last}', cycles=2000), plain)
+        _, rows = self.read_detail(filtered)
+        without_seq = lambda r: {k: v for k, v in r.items() if k != 'seq'}
+        self.assertEqual([without_seq(r) for r in rows if r['kind'] == 'cpu_step'],
+                         [without_seq(r) for r in steps[4:8]])
+        no_cpu = self.scratch / 'no-cpu.txt'
+        self.boot('--mouse-witness', no_cpu, '--mouse-witness-detail', '1', cycles=2000)
+        self.assertNotIn('cpu_step', no_cpu.read_text())
+
+    def test_cpu_step_capacity_and_option_validation(self):
+        path = self.scratch / 'cpu-full.txt'
+        for args in (('--mouse-witness-cpu', '1'),
+                     ('--mouse-witness', path, '--mouse-witness-cpu', '1'),
+                     ('--mouse-witness', path, '--mouse-witness-detail', '1', '--mouse-witness-cpu', '0'),
+                     ('--mouse-witness', path, '--mouse-witness-detail', '1', '--mouse-witness-cpu', '1', '--mouse-witness-cpu', '1')):
+            self.assertEqual(self.boot(*args, exit_code=2)['status'], 'error')
+        self.assertFalse(path.exists())
+        self.rom.write_bytes(make_rom(bytes.fromhex('60fe')))
+        self.boot('--mouse-witness', path, '--mouse-witness-detail', '1',
+                  '--mouse-witness-cpu', '1', cycles=1000000)
+        meta, rows = self.read_detail(path)
+        self.assertEqual(len(rows), 65536)
+        self.assertGreater(meta[4], 0)
+        self.assertEqual(meta[5], 0)
+
     def test_cpu_mask_boundaries_and_observation_only(self):
         # Original explicit SR assignments, followed by an unchanging loop.
         self.rom.write_bytes(make_rom(bytes.fromhex('46fc2000 4e71 46fc2700 4e71 46fc2300 60fe')))

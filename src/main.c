@@ -144,6 +144,7 @@ struct request {
     bool keyboard_witness_limit_set;
     bool display_witness_range_set;
     bool mouse_witness_detail;
+    bool mouse_witness_cpu;
     bool raw_mouse_phases;
     bool relative_motion;
     bool window_input;
@@ -539,6 +540,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mouse-witness-detail") == 0 && !request->mouse_witness_detail) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-detail requires 1";
             request->mouse_witness_detail = true;
+        } else if (wcscmp(option, L"--mouse-witness-cpu") == 0 && !request->mouse_witness_cpu) {
+            if (wcscmp(value, L"1") != 0) return "mouse-witness-cpu requires 1";
+            request->mouse_witness_cpu = true;
         } else if (wcscmp(option, L"--mouse-witness-memory") == 0 && !request->mouse_witness_memory.length) {
             if (!parse_fields(value, fields, 2) || fields[1] == 0 || fields[0] >= MAC128K_RAM_SIZE ||
                 fields[1] > MAC128K_RAM_SIZE - fields[0])
@@ -715,6 +719,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     }
     if (request->mouse_witness_detail && request->mouse_witness_path == NULL)
         return "mouse-witness-detail requires mouse-witness";
+    if (request->mouse_witness_cpu && (!request->mouse_witness_path || !request->mouse_witness_detail))
+        return "mouse-witness-cpu requires mouse-witness and mouse-witness-detail 1";
     if (request->mouse_witness_memory.length && (!request->mouse_witness_path || !request->mouse_witness_detail))
         return "mouse-witness-memory requires mouse-witness and mouse-witness-detail 1";
     if (!request->mouse_witness_range_set) {
@@ -985,6 +991,7 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         [MAC128K_WITNESS_GUARD] = "guard",
         [MAC128K_WITNESS_RAM_WRITE] = "ram_write",
         [MAC128K_WITNESS_CPU_MASK] = "cpu_mask",
+        [MAC128K_WITNESS_CPU_STEP] = "cpu_step",
     };
     size_t count;
     uint64_t dropped;
@@ -2248,6 +2255,7 @@ int wmain(int argc, wchar_t **argv)
              "  --keyboard-fault COMMAND:OCCURRENCE:KIND:ARG (kind 1 stall, 2 no reply, 3 delay, 4 malformed, 5 disconnect)\n"
              "  --display-witness PATH [--display-witness-range FIRST:LAST] [--display-witness-memory ADDRESS:LENGTH]\n"
              "  --mouse-witness-range FIRST:LAST --mouse-witness-detail 1 --mouse-witness-memory ADDRESS:LENGTH\n"
+             "  --mouse-witness-cpu 1 (instruction boundaries; requires detailed mouse witness)\n"
              "  --mouse-edge-cycles N --mouse-vbl-guard N\n"
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
@@ -2301,6 +2309,8 @@ int wmain(int argc, wchar_t **argv)
     }
     if (error == NULL && request.mouse_witness_detail)
         mac128k_mouse_witness_detailed(machine.mac, true);
+    if (error == NULL && request.mouse_witness_cpu && !mac128k_mouse_witness_cpu(machine.mac, true))
+        error = "cannot configure CPU instruction witness";
     if (error == NULL && request.mouse_witness_memory.length &&
         !mac128k_mouse_witness_memory(machine.mac, request.mouse_witness_memory.address,
                                       request.mouse_witness_memory.length))

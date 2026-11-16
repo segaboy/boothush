@@ -104,6 +104,47 @@ SCC-handler spans exceed the fast schedule's DCD-change interval. This helps
 target the next guest experiment; neither result validates physical timing
 or establishes a sole cause.
 
+### Optional instruction boundaries
+
+`--mouse-witness-cpu 1` additionally records `cpu_step` immediately before each
+CPU execute operation within the inclusive witness range. It requires both
+`--mouse-witness` and `--mouse-witness-detail 1`. `address` is the next PC,
+`value` is SR IPL (0..7), and `reg` is zero. The existing `pc` column retains
+its instruction-context meaning; use `address` to identify the upcoming code.
+The cycle difference to the next `cpu_step` measures that execute operation
+in the model. It may include interrupt/exception processing, and it does not
+measure a physical instruction or bus cycle. The final step is censored.
+
+This is disabled by default and uses the same 65,536-row buffer as device and
+mask events. Choose a short cycle range; when rows are dropped, do not sum the
+retained prefix as if it covered the full interval. Original tests verify
+instruction addresses, modeled step intervals, inclusive filtering, unchanged
+guest output, opt-in behavior, option rejection and the shared capacity limit.
+ClasSICK's `scripts/Analyze-MacInterruptWitness.py` correlates a complete SCC
+mask span with its own linked text symbols, verifies coverage, and records
+the input identities. No game or firmware disassembly is needed.
+
+Windows active-profile twins (Mac/286/NES, retained paused-x64 media archive)
+produced executable SHA-256
+`cd3992737cc78ef5758a376872cac8005e7b959157b4be69349f31141c68fe9b`.
+Build inputs and commands: `C:/Repos/.task-temp/boothush-step-active-20261116-b/report.json`.
+The final focused suite runs 47 tests: 45 pass and two optional external-ROM
+cases skip. This includes instruction/mask witnesses, censored-span analysis,
+286 core/devices and the independent paired-canvas tests. Log:
+`C:/Repos/.task-temp/boothush-step-active-20261116-b/focused-tests.log`.
+The earlier development executable `74d5471c...` is retained separately; the
+later binary adds the CLI help entry. No x64 guest work was resumed.
+
+Use `probe_mac_cpu_mask.py --cpu-steps` to retain paired traced/untraced state
+and frame checks with this option. The ClasSICK baseline and revised inbox
+runs each retain both 2,048- and 4,096-edge comparisons in
+`C:/Repos/.task-temp/classick-baseline-steps-20261116-a/report.json` and
+`C:/Repos/.task-temp/classick-inbox-inline-mask-20261116-a/report.json`.
+The receiving project's canonical receipt interprets its guest symbols and
+records the continuing fast-input failure. Port title, axis and native-game
+regressions also pass with this executable; their canonical title receipt
+records the identities. These tests do not validate hardware timing.
+
 ## Filtered guest RAM writes
 
 `--mouse-witness-memory ADDRESS:LENGTH` requires `--mouse-witness` and `--mouse-witness-detail 1`. It selects `BHMACMOUSE3` only for that request; `BHMACMOUSE1` and `BHMACMOUSE2` remain unchanged otherwise. The single byte range is in physical RAM offsets from `0` through `0x1ffff`, with positive length and an exclusive end no greater than `0x20000`. Invalid or repeated options fail before running. It observes CPU writes that successfully reach RAM; it neither reads MMIO nor adds guest reads or writes. The startup RAM overlay at bus `0x600000` maps to the same physical offsets as low RAM. Each event carries its actual CPU bus `address` and a separate `ram_offset` so aliases can be distinguished.

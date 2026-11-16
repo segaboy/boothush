@@ -153,6 +153,7 @@ struct mac128k {
     uint64_t witness_dropped = 0;
     size_t witness_count = 0;
     bool witness_detail = false;
+    bool witness_cpu = false;
     uint8_t witness_cpu_mask = 8; // 8 denotes no boundary baseline yet.
     uint32_t witness_pending = 0;
     uint32_t witness_ram_first = 0, witness_ram_length = 0;
@@ -724,6 +725,10 @@ void mac128k_run(mac128k *machine, uint32_t cycles)
         while (machine->cpu.getClock() - start_cycle < cycles) {
             const uint32_t instruction = machine->cpu.getPC();
             if (machine->witness && machine->witness_detail) machine->observe_cpu_mask(instruction);
+            if (machine->witness && machine->witness_detail && machine->witness_cpu)
+                machine->observe(MAC128K_WITNESS_CPU_STEP,
+                    static_cast<uint64_t>(machine->cpu.getClock()), instruction, 0,
+                    static_cast<uint8_t>((machine->cpu.getSR() >> 8) & 7));
             machine->cpu.execute();
             if (machine->witness && machine->witness_detail) machine->observe_cpu_mask(instruction);
             if (machine->cpu.isHalted()) {
@@ -780,6 +785,7 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
     machine->witness_last = last_cycle;
     machine->witness_count = 0;
     machine->witness_cpu_mask = 8;
+    machine->witness_cpu = false;
     machine->witness_dropped = 0;
     machine->witness_ram_first = machine->witness_ram_length = 0;
     machine->witness_ram_matched = machine->witness_ram_dropped = 0;
@@ -790,6 +796,13 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
 void mac128k_mouse_witness_detailed(mac128k *machine, bool enabled)
 {
     machine->witness_detail = enabled;
+}
+
+bool mac128k_mouse_witness_cpu(mac128k *machine, bool enabled)
+{
+    if (!machine || !machine->witness || !machine->witness_detail) return false;
+    machine->witness_cpu = enabled;
+    return true;
 }
 
 bool mac128k_mouse_witness_memory(mac128k *machine, uint32_t first, uint32_t length)

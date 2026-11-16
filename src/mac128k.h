@@ -58,6 +58,8 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
 
 /* Detailed observations are opt-in; the legacy witness remains unchanged. */
 void mac128k_mouse_witness_detailed(mac128k *machine, bool enabled);
+/* Opt-in instruction boundaries in the same bounded detailed witness. */
+bool mac128k_mouse_witness_cpu(mac128k *machine, bool enabled);
 /* Physical RAM offsets, not bus aliases; valid only for an active detailed witness. */
 bool mac128k_mouse_witness_memory(mac128k *machine, uint32_t first, uint32_t length);
 void mac128k_mouse_witness_memory_stats(const mac128k *machine, uint64_t *matched, uint64_t *dropped);
