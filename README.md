@@ -102,6 +102,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--pc-witness PATH` | PC only. Save a bounded 286 execution witness to a new file. |
 | `--fail-hard-disk-read-at C:H:S:N` | PC built-in firmware only. Fail exactly the positive Nth valid read starting at the selected CHS; see [PC/AT](docs/pc-at.md). |
 | `--fail-hard-disk-write-at C:H:S:N` | PC built-in firmware only. Fail exactly the positive Nth valid write starting at the selected CHS; see [PC/AT](docs/pc-at.md). |
+| `--fail-hard-disk-reset-at N` | PC built-in firmware only. Fail exactly the positive Nth valid fixed-disk reset; see [PC/AT](docs/pc-at.md). |
 | `--pc-witness-memory ADDRESS:LENGTH` | With `--pc-witness`, record byte bus reads and writes within the specified physical range. |
 | `--pc-witness-io PORT:LENGTH` | With `--pc-witness`, record bus input and output within the specified port range. |
 | `--pc-witness-cycles FIRST:LAST` | With `--pc-witness`, restrict recorded events to these inclusive cycle boundaries. |

@@ -297,6 +297,41 @@ class PcAtIntegrationTests(unittest.TestCase):
                          '--fail-hard-disk-write-at','0:0:2:2',exit_code=2)['status'],'error')
         self.assertEqual(self.run_guest('--fail-hard-disk-write-at','0:0:2:2',exit_code=2)['status'],'error')
 
+    def test_hard_disk_reset_failure_at_occurrence(self):
+        program=checked_program((
+            ('b80000 ba8000 cd13',0x72), # first valid hard-disk reset succeeds
+            ('b80000 ba8100 cd13',0x73), # invalid drive does not count
+            ('b80000 ba8000 cd13',0x73), # second valid reset is injected
+            ('80fc20',0x75),
+            ('b80001 ba8000 cd13',0x73), # last-status query reports failure
+            ('80fc20',0x75),
+            ('b80000 ba8000 cd13',0x72), # next reset succeeds
+        ),0x42)
+        disk=self.write('ordinal-reset.img',boot_image(program,HARD_DISK_SIZE))
+        before=hashlib.sha256(disk.read_bytes()).hexdigest()
+        result=self.run_guest('--hard-disk',disk,'--fail-hard-disk-reset-at','2','--until-post','0x42')
+        self.assertEqual(result['status'],'condition_met')
+        self.assertEqual(result['hard_disk_reset_failure'],
+                         {'occurrence':2,'matched':3,'injected':1,'bios_status':32})
+        control=checked_program((('b80000 ba8000 cd13',0x72),),0x43)
+        control_disk=self.write('ordinal-reset-unreached.img',boot_image(control,HARD_DISK_SIZE))
+        result=self.run_guest('--hard-disk',control_disk,'--fail-hard-disk-reset-at','2','--until-post','0x43')
+        self.assertEqual((result['hard_disk_reset_failure']['matched'],result['hard_disk_reset_failure']['injected']),(1,0))
+        mixed=checked_program((
+            ('b80000 ba0000 cd13',0x72), # valid floppy reset does not count
+            ('b80000 ba8000 cd13',0x73), # first valid hard-disk reset fails
+            ('80fc20',0x75),
+        ),0x44)
+        floppy=self.write('mixed-reset.img',boot_image(mixed,1228800))
+        result=self.run_guest('--floppy',floppy,'--hard-disk',disk,'--fail-hard-disk-reset-at','1','--until-post','0x44')
+        self.assertEqual((result['hard_disk_reset_failure']['matched'],result['hard_disk_reset_failure']['injected']),(1,1))
+        for bad in ('0','1:2','-1'):
+            self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-reset-at',bad,exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-reset-at','1',
+                         '--fail-hard-disk-reset-at','2',exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--fail-hard-disk-reset-at','1',exit_code=2)['status'],'error')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
+
     def test_selected_hard_disk_write_failure(self):
         program = bytearray.fromhex('31c0 8ec0 bb007d b80103 b90200 ba8000 cd13 72 00')
         branch = len(program)-1

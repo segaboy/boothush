@@ -116,6 +116,9 @@ transient-failure experiments. The independent device tests and the
 ClasSICK disposable-copy retry experiment are linked from
 [hard-disk fault evidence](pc286-hard-disk-fault-20261114.md); neither
 qualifies a physical installer or guarantees real disk-write atomicity.
+`--fail-hard-disk-reset-at N` can additionally exercise a guest's failure
+branch after a synthetic disk reset error. It is independent of read and
+write injections and is not a physical reset model.
 The `--fail-hard-disk-read-once` variant injects one matching failure so an
 original guest can exercise a subsequent reset and retry; see the [PC/AT
 guide](pc-at.md). It models no physical media recovery behavior.

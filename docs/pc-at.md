@@ -90,6 +90,14 @@ Disk reset does not rearm the selection. Choose either this option or the
 persistent write option. The feature is a synthetic firmware-model fault,
 not a claim about partial physical writes, power loss, or real BIOS behavior.
 
+`--fail-hard-disk-reset-at N` rejects exactly the positive one-based Nth
+valid built-in-firmware fixed-disk `INT 13h AH=00h` reset with carry set,
+`AH=20h`, and the modeled last-status byte updated. The JSON object
+`hard_disk_reset_failure` reports `occurrence`, `matched`, `injected`, and
+`bios_status`. Invalid drives and floppy resets do not count. The injection
+is disabled by default, requires `pc286` with a hard disk and no custom ROM,
+and does not model any physical controller's reset failure.
+
 The machine has RAM at `00000h`–`9ffffh`, EGA aperture in `a0000h`–`bffffh`, optional EGA ROM at `c0000h`, system ROM at `f0000h` and the reset ROM alias at `ff0000h` in the 24-bit space. `--scancode CYCLE:BYTE` schedules raw keyboard set-2 bytes at guest CPU boundaries, including `f0` followed by the key byte for release; it does not touch the host keyboard. The built-in keyboard shim handles a limited set of translated keys, not an entire BIOS keyboard implementation. See [EGA diagnostics](ega.md) for graphics and caller-supplied text-font limitations.
 
 When at least one scancode is scheduled, the result JSON includes

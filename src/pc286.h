@@ -64,6 +64,8 @@ typedef struct {
     uint16_t hard_write_failure_cylinder;
     uint8_t hard_write_failure_head, hard_write_failure_sector;
     uint64_t hard_write_failures;
+    uint32_t hard_reset_failure_at;
+    uint64_t hard_reset_matches, hard_reset_failures;
 } pc286_state;
 
 /* These constructors copy the supplied image. NULL indicates invalid size or allocation failure. */
@@ -86,6 +88,8 @@ bool pc286_fail_hard_disk_read_at(pc286 *machine, unsigned cylinder, unsigned he
 bool pc286_fail_hard_disk_write(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector);
 /* Fail exactly the positive one-based matching valid write occurrence. */
 bool pc286_fail_hard_disk_write_at(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector, uint32_t occurrence);
+/* Built-in firmware only: fail one valid hard-disk reset occurrence. */
+bool pc286_fail_hard_disk_reset_at(pc286 *machine, uint32_t occurrence);
 const uint8_t *pc286_hard_disk(const pc286 *machine);
 bool pc286_inject_scancode(pc286 *machine, uint8_t scancode);
 void pc286_expect_input(pc286 *machine, bool pending);

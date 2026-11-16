@@ -163,6 +163,8 @@ struct pc286 final : boothush_i286::Bus {
     uint16_t hard_write_failure_cylinder = 0;
     uint8_t hard_write_failure_head = 0, hard_write_failure_sector = 0;
     uint64_t hard_write_failures = 0;
+    uint32_t hard_reset_failure_at = 0;
+    uint64_t hard_reset_matches = 0, hard_reset_failures = 0;
     bool future_input = false;
     bool extended_scan = false;
     unsigned pause_bytes = 0;
@@ -457,7 +459,12 @@ struct pc286 final : boothush_i286::Bus {
         const unsigned operation = regs.ax >> 8;
         switch (operation) {
         case 0x00:
-            disk_status(regs, hard, 0);
+            if (hard && hard_reset_failure_at && ++hard_reset_matches == hard_reset_failure_at) {
+                ++hard_reset_failures;
+                disk_status(regs, true, 0x20);
+            } else {
+                disk_status(regs, hard, 0);
+            }
             break;
         case 0x01:
             disk_status(regs, hard, ram[hard ? 0x474 : 0x441]);
@@ -887,6 +894,14 @@ bool pc286_fail_hard_disk_write_at(pc286 *machine, unsigned cylinder, unsigned h
     return true;
 }
 
+bool pc286_fail_hard_disk_reset_at(pc286 *machine, uint32_t occurrence)
+{
+    if (!machine || !machine->built_in_firmware || !machine->hard_disk || !occurrence) return false;
+    machine->hard_reset_failure_at = occurrence;
+    machine->hard_reset_matches = machine->hard_reset_failures = 0;
+    return true;
+}
+
 pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size)
@@ -1046,6 +1061,9 @@ pc286_state pc286_get_state(const pc286 *machine)
     state.hard_write_failure_head = machine->hard_write_failure_head;
     state.hard_write_failure_sector = machine->hard_write_failure_sector;
     state.hard_write_failures = machine->hard_write_failures;
+    state.hard_reset_failure_at = machine->hard_reset_failure_at;
+    state.hard_reset_matches = machine->hard_reset_matches;
+    state.hard_reset_failures = machine->hard_reset_failures;
     if (machine->fault != nullptr) {
         state.fault_operation = machine->fault;
         state.fault_address = state.pc;

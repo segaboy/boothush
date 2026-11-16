@@ -135,6 +135,23 @@ The Not Super Tilt Bro mouse-title and side-tilt test also passed on that
 build; see `C:/Repos/Not-Super-Tilt-Bro/docs/side-tilt-evidence.md`.
 These observations do not prove real-media write atomicity or hardware input.
 
+The subsequent `--fail-hard-disk-reset-at N` addition injects one failure in
+the built-in fixed-disk reset service. A separate guest checked a successful
+first reset, an invalid drive that did not count, the selected failed reset,
+its status query and a subsequent successful reset. A valid floppy reset also
+does not consume the fixed-disk occurrence. An unreached occurrence,
+malformed/duplicate options and preservation of the input disk were also
+checked. All 29 PC tests passed on active-profile twin SHA-256
+`f795a383e4f949a62f258559041cf3dc5360b0cca29a2f146cb2507fd496b8cc`;
+build inputs and test log are in
+`C:/Repos/.task-temp/boothush-reset-ordinal-active-20261115-a`. The
+ClasSICK test combines a selected failed write and failed reset at each of
+three tracks; it stops before retrying and verifies the exact partial disk.
+That report is `C:/Repos/.task-temp/pc286-reset-retry-20261115-b/report.json`.
+The port title and side-tilt regression also passed on this build in
+`C:/Repos/.task-temp/nstb-reset-regression-20261115-a/report.json`. This
+injection does not establish physical BIOS or controller behavior.
+
 ClasSICK also used bounded physical-memory inspection with an instrumented
 diagnostic loader to observe its 286 guest's stack watermark at eight window
 checkpoints. The linked evidence above records the separate known-depth
