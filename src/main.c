@@ -126,6 +126,8 @@ struct request {
     uint32_t inspect_total;
     bool stop_at_pc;
     uint32_t target_pc;
+    bool pc_after_set;
+    uint32_t pc_after_cycle;
     bool stop_at_post;
     uint32_t target_post;
     uint32_t live_scale;
@@ -645,6 +647,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
             request->stop_at_pc = true;
             request->target_pc = fields[0];
+        } else if (wcscmp(option, L"--until-pc-after") == 0 && !request->pc_after_set) {
+            if (!parse_fields(value, fields, 1)) {
+                return "until-pc-after requires a guest cycle";
+            }
+            request->pc_after_set = true;
+            request->pc_after_cycle = fields[0];
         } else if (wcscmp(option, L"--until-post") == 0 && !request->stop_at_post) {
             if (!parse_fields(value, fields, 1) || fields[0] > 0xff) {
                 return "until-post requires one byte";
@@ -667,6 +675,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->machine == MACHINE_UNSET ||
         request->cycle_limit == 0 || request->timeout_ms == 0) {
         return "machine, cycles, and timeout-ms are required";
+    }
+    if (request->pc_after_set && (!request->stop_at_pc || request->pc_after_cycle > request->cycle_limit)) {
+        return "until-pc-after requires until-pc and a cycle no greater than cycles";
     }
     if((request->series.path!=NULL)!=(request->series.count!=0) ||
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
@@ -1545,7 +1556,8 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             if(series->memory.length && !read_ram(machine,series->memory.address,sample->memory,series->memory.length))
                 return (struct run_result){"error","cannot read series memory",2};
         }
-        if ((request->stop_at_pc && state.pc == request->target_pc) ||
+        if ((request->stop_at_pc && state.pc == request->target_pc &&
+             state.cycles >= request->pc_after_cycle) ||
             (request->stop_at_post && state.post_written && state.post == request->target_post) ||
             matches(machine, request->until)) {
             return (struct run_result){"condition_met", NULL, 0};
@@ -2256,7 +2268,7 @@ int wmain(int argc, wchar_t **argv)
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
-             "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS --until-post BYTE --cancel-event NAME\n"
+             "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
              "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"

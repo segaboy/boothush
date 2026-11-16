@@ -107,6 +107,18 @@ class Pc286Tests(unittest.TestCase):
         self.assertTrue(halted["halted"])
         self.assertEqual(halted["pc"], 0xf0001)
 
+    def test_pc_after_cycle(self):
+        # Original near loop writes an incrementing counter to conventional RAM.
+        image = make_rom(bytes.fromhex('31c0 8ed8 40 a30006 ebfa'))
+        args = ('--until-pc', '0xf0004', '--inspect', '0x600:2')
+        first = self.boot(image, *args)
+        self.assertEqual(first, self.boot(image, *args, '--until-pc-after', '0'))
+        later = self.boot(image, *args, '--until-pc-after', '200')
+        self.assertEqual(later['status'], 'condition_met')
+        self.assertGreaterEqual(later['cycles'], 200)
+        self.assertNotEqual(later['memory']['bytes'], first['memory']['bytes'])
+        self.assertEqual(later, self.boot(image, *args, '--until-pc-after', str(later['cycles'])))
+
     def test_286_protected_mode_and_post_condition(self):
         image = make_rom(PROTECTED_PROGRAM, protected_mode=True)
         reset_msw = self.boot(image, "--until", "0x600:2:0xfff0", "--inspect", "0x600:4")

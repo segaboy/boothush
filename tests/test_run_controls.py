@@ -16,6 +16,35 @@ class RunControlTests(BootHushTestCase):
         self.assertEqual(result["status"], "timeout")
         self.assertLess(result["cycles"], 1_000_000_000)
 
+    def test_pc_stop_after_cycle(self):
+        # Original loop: D0 counts visits; no input or external ROM required.
+        self.rom.write_bytes(make_rom(bytes.fromhex('7000 5280 60fc')))
+        pc = '0x400106'
+        args = ('--until-pc', pc, '--mac-cpu-state', '1')
+        initial = self.boot(*args)
+        self.assertEqual(initial, self.boot(*args, '--until-pc-after', '0'))
+        later = self.boot(*args, '--until-pc-after', '200')
+        self.assertEqual(later['status'], 'condition_met')
+        self.assertGreaterEqual(later['cycles'], 200)
+        self.assertGreater(later['cpu']['d'][0], initial['cpu']['d'][0])
+        self.assertEqual(later, self.boot(*args, '--until-pc-after', str(later['cycles'])))
+        # A cycle-budget stop at the same instruction has the identical state.
+        control = self.boot('--mac-cpu-state', '1', cycles=later['cycles'])
+        self.assertEqual({k:v for k,v in later.items() if k != 'status'},
+                         {k:v for k,v in control.items() if k != 'status'})
+        missed = self.boot('--until-pc', '0x400104', '--until-pc-after', '200', exit_code=1)
+        self.assertEqual(missed['status'], 'cycle_limit')
+
+    def test_pc_after_refusals(self):
+        for args in (('--until-pc-after', '1'),
+                     ('--until-pc', '0x400104', '--until-pc-after', '2001'),
+                     ('--until-pc', '0x400104', '--until-pc-after', '-1'),
+                     ('--until-pc', '0x400104', '--until-pc-after', '4294967296'),
+                     ('--until-pc', '0x400104', '--until-pc-after', 'x'),
+                     ('--until-pc', '0x400104', '--until-pc-after', '0', '--until-pc-after', '0')):
+            with self.subTest(args=args):
+                self.assertEqual(self.boot(*args, exit_code=2)['status'], 'error')
+
     def test_cancellation_event(self):
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.CreateEventW.argtypes = [

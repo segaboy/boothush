@@ -80,6 +80,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--ega-rom PATH` | PC only, with a system ROM. Map a valid EGA option ROM at `0xC0000`. |
 | `--until ADDRESS:WIDTH:VALUE` | Stop when 1, 2 or 4 physical memory bytes equal the value in guest byte order. |
 | `--until-pc ADDRESS` | Stop at a 24-bit physical instruction address. |
+| `--until-pc-after CYCLE` | With `--until-pc`, ignore earlier visits and stop at the first matching boundary at or after this absolute guest cycle. Mac/286 only; see [qualified PC stops](docs/pc-stop-cycle.md). |
 | `--until-post BYTE` | PC only. Stop when the guest writes the value to I/O port `0x80`. |
 | `--inspect ADDRESS:LENGTH` | Inspect physical memory at stop, without device side effects. Repeat up to 16 times, each 1–4,096 bytes, with at most 16,384 bytes total. Overlaps and duplicates are returned in request order. One range keeps the existing `memory` object. Multiple ranges use `memory_ranges`, an array of `{address, bytes}` objects. |
 | `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
