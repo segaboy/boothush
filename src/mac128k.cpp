@@ -153,6 +153,7 @@ struct mac128k {
     uint64_t witness_dropped = 0;
     size_t witness_count = 0;
     bool witness_detail = false;
+    uint8_t witness_cpu_mask = 8; // 8 denotes no boundary baseline yet.
     uint32_t witness_pending = 0;
     uint32_t witness_ram_first = 0, witness_ram_length = 0;
     uint64_t witness_ram_matched = 0, witness_ram_dropped = 0;
@@ -238,6 +239,17 @@ struct mac128k {
                                     x.phase, y.phase, mouse_pressed, scc_pending(), latched,
                                     dcd, via_ifr(), interrupt_enable, irq_level,
                                     cpu.getPC0(), 0, 0, witness_pending, 0, 0, 0, 0, 0, 0, 0, 0};
+    }
+
+    void observe_cpu_mask(uint32_t instruction)
+    {
+        const uint64_t cycle = static_cast<uint64_t>(cpu.getClock());
+        if (cycle < witness_first || cycle > witness_last) return;
+        const uint8_t mask = static_cast<uint8_t>((cpu.getSR() >> 8) & 7);
+        if (mask != witness_cpu_mask) {
+            observe(MAC128K_WITNESS_CPU_MASK, cycle, instruction, witness_cpu_mask, mask);
+            witness_cpu_mask = mask;
+        }
     }
 
     unsigned ca2_mode() const
@@ -710,7 +722,10 @@ void mac128k_run(mac128k *machine, uint32_t cycles)
     const auto start_cycle = machine->cpu.getClock();
     try {
         while (machine->cpu.getClock() - start_cycle < cycles) {
+            const uint32_t instruction = machine->cpu.getPC();
+            if (machine->witness && machine->witness_detail) machine->observe_cpu_mask(instruction);
             machine->cpu.execute();
+            if (machine->witness && machine->witness_detail) machine->observe_cpu_mask(instruction);
             if (machine->cpu.isHalted()) {
                 machine->fault(machine->cpu.getPC(), "halt");
             }
@@ -764,6 +779,7 @@ bool mac128k_start_mouse_witness(mac128k *machine, uint64_t first_cycle, uint64_
     machine->witness_first = first_cycle;
     machine->witness_last = last_cycle;
     machine->witness_count = 0;
+    machine->witness_cpu_mask = 8;
     machine->witness_dropped = 0;
     machine->witness_ram_first = machine->witness_ram_length = 0;
     machine->witness_ram_matched = machine->witness_ram_dropped = 0;

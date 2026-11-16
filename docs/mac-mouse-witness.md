@@ -60,6 +60,50 @@ Kinds include `snapshot`, `input_due`, `sample_accepted`, `sample_rejected`, `gu
 
 Recordings contain accepted samples and timing settings; replay source rows are labelled 3. Repeatability requires the same ROM, media, emulator build, inputs and settings, and a comparable stop condition. Timeouts, additional scheduled input and different builds can change results. Matching replay demonstrates reproduction in BootHush only. Trace output fails if its new path cannot be created; the process result reports that failure.
 
+## CPU interrupt-mask observations
+
+Detailed witnesses (`BHMACMOUSE2` and `BHMACMOUSE3`) also include `cpu_mask`.
+The first instruction boundary sampled inside the inclusive range establishes
+a baseline; subsequent rows report changes. `value` is the current SR IPL
+(0..7), and `reg` is the previous observed IPL, or 8 for that first baseline.
+`address` is the PC captured before the CPU execute operation. A change seen
+after that operation can include interrupt entry or exception handling; it is
+not a claim that the instruction at that address alone changed SR. `pc` keeps
+its existing instruction-context meaning. Legacy V1 output is unchanged.
+
+The observer uses the CPU's side-effect-free public `getSR()` accessor before
+and after execute. It does not read guest memory or devices, and it does not
+change SR. Changes within one execute operation that return to the same IPL
+are not visible. These are instruction-boundary intervals, not cycle-exact
+hardware masking times. The first and last spans are censored by the selected
+range, and the existing shared row cap applies. Dropped rows invalidate an
+assumption that all mask changes were retained.
+
+`scripts/probe_mac_cpu_mask.py` compares complete stopped JSON and framebuffer
+with and without tracing, pins the supplied ROM hash, retains exact commands,
+and reports closed mask spans separately from censored boundaries. It refuses
+an incomplete or overflowing trace. Supply input times after a separately
+observed guest readiness point; the harness does not infer readiness or the
+meaning of inspected guest memory. All runs are bounded and headless.
+
+Original unit fixtures cover explicit SR changes, inclusive filtering, stable
+mask suppression, unchanged legacy output, interrupt entry and RTE. With the
+Windows active-profile executable SHA-256
+`f84de40301b433264fb3697bb2dcd132cdeb901a974d416e8d4482c81e73495d`,
+the witness suite passes 11 tests; two optional external-fixture cases are
+skipped. Log: `C:/Repos/.task-temp/boothush-mask-active-20261116-a/witness-tests-final.log`.
+The observer uses the existing Moira public accessor declaration,
+not its implementation; no third-party CPU code was copied or changed.
+
+The ClasSICK and port results are indexed in their canonical receipts:
+`C:/Repos/ClasSICK-0.97/docs/development/windows-m68k-toolchain-20261114.md`
+and `C:/Repos/Not-Super-Tilt-Bro/docs/mouse-title-evidence.md`. In the latter,
+title polling remains at IPL7 during the selected range: mask tracing alone
+does not diagnose a polling loop's sampling losses. In ClasSICK, symbol-matched
+SCC-handler spans exceed the fast schedule's DCD-change interval. This helps
+target the next guest experiment; neither result validates physical timing
+or establishes a sole cause.
+
 ## Filtered guest RAM writes
 
 `--mouse-witness-memory ADDRESS:LENGTH` requires `--mouse-witness` and `--mouse-witness-detail 1`. It selects `BHMACMOUSE3` only for that request; `BHMACMOUSE1` and `BHMACMOUSE2` remain unchanged otherwise. The single byte range is in physical RAM offsets from `0` through `0x1ffff`, with positive length and an exclusive end no greater than `0x20000`. Invalid or repeated options fail before running. It observes CPU writes that successfully reach RAM; it neither reads MMIO nor adds guest reads or writes. The startup RAM overlay at bus `0x600000` maps to the same physical offsets as low RAM. Each event carries its actual CPU bus `address` and a separate `ram_offset` so aliases can be distinguished.

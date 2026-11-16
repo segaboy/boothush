@@ -984,6 +984,7 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         [MAC128K_WITNESS_SAMPLE_REJECTED] = "sample_rejected",
         [MAC128K_WITNESS_GUARD] = "guard",
         [MAC128K_WITNESS_RAM_WRITE] = "ram_write",
+        [MAC128K_WITNESS_CPU_MASK] = "cpu_mask",
     };
     size_t count;
     uint64_t dropped;

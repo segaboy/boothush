@@ -179,6 +179,58 @@ class MacMouseWitnessCliTests(BootHushTestCase):
         self.assertEqual([row["cycle"] for row in rows], sorted(row["cycle"] for row in rows))
         return meta, rows
 
+    def test_cpu_mask_interrupt_entry_and_rte(self):
+        # Original level-2 handler: explicitly mask, acknowledge SCC, count, RTE.
+        program = (
+            write_byte(0xEFFFFE, 0) + write_byte(0xEFE7FE, 0x10)
+            + bytes.fromhex('23fc0040020000000068')
+            + write_byte(RESULT, 0)
+            + write_byte(SCC_WRITE_A, 15) + write_byte(SCC_WRITE_A, 8)
+            + write_byte(SCC_WRITE_A, 1) + write_byte(SCC_WRITE_A, 1)
+            + write_byte(SCC_WRITE_A, 9) + write_byte(SCC_WRITE_A, 10)
+            + bytes.fromhex('46fc2000 60fe'))
+        rom = bytearray(make_rom(program))
+        handler = (bytes.fromhex('007c0700') + write_byte(SCC_WRITE_A, 16)
+                   + write_byte(SCC_WRITE_A, 56)
+                   + bytes.fromhex('5239') + struct.pack('>I', RESULT)
+                   + bytes.fromhex('4e73'))
+        rom[0x200:0x200+len(handler)] = handler
+        self.rom.write_bytes(rom)
+        inputs = ('--mouse-phase', '1500:3:2', '--inspect', '0xb00:1')
+        plain = self.boot(*inputs, cycles=3000)
+        trace = self.scratch / 'mask-irq.txt'
+        traced = self.boot(*inputs, '--mouse-witness', trace,
+                           '--mouse-witness-detail', '1', cycles=3000)
+        self.assertEqual(traced, plain)
+        self.assertEqual(traced['memory']['bytes'], '01')
+        meta, rows = self.read_detail(trace)
+        self.assertEqual(meta[4], 0)
+        self.assertEqual([(r['reg'], r['value']) for r in rows if r['kind'] == 'cpu_mask'],
+                         [(8, 7), (7, 0), (0, 2), (2, 7), (7, 0)])
+        self.assertEqual([r['value'] for r in rows if r['kind'] == 'irq_accept'], [2])
+
+    def test_cpu_mask_boundaries_and_observation_only(self):
+        # Original explicit SR assignments, followed by an unchanging loop.
+        self.rom.write_bytes(make_rom(bytes.fromhex('46fc2000 4e71 46fc2700 4e71 46fc2300 60fe')))
+        plain=self.boot(cycles=1000)
+        trace=self.scratch/'mask.txt'
+        observed=self.boot('--mouse-witness',trace,'--mouse-witness-detail','1',cycles=1000)
+        self.assertEqual(observed,plain)
+        meta,rows=self.read_detail(trace)
+        masks=[r for r in rows if r['kind']=='cpu_mask']
+        self.assertEqual([(r['reg'],r['value']) for r in masks],[(8,7),(7,0),(0,7),(7,3)])
+        self.assertEqual(meta[4],0)
+        self.assertTrue(all(r['address']>=0x400000 for r in masks))
+        trace2=self.scratch/'mask-filtered.txt'
+        first=masks[1]['cycle'];last=masks[-1]['cycle']
+        self.assertEqual(self.boot('--mouse-witness',trace2,'--mouse-witness-detail','1',
+                         '--mouse-witness-range',f'{first}:{last}',cycles=1000),plain)
+        _,filtered=self.read_detail(trace2)
+        self.assertEqual([(r['reg'],r['value']) for r in filtered if r['kind']=='cpu_mask'],[(8,0),(0,7),(7,3)])
+        legacy=self.scratch/'mask-legacy.txt'
+        self.assertEqual(self.boot('--mouse-witness',legacy,cycles=1000),plain)
+        self.assertNotIn('cpu_mask',legacy.read_text())
+
     def test_memory_witness_alias_partial_writes_and_no_side_effects(self):
         program = (
             struct.pack(">HHI", 0x33fc, 0xabcd, 0x600b02)  # Overlay RAM alias.
