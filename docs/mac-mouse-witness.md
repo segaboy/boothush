@@ -248,3 +248,15 @@ bus timing, a hardware rate limit, or which component is solely responsible.
 A subsequent ClasSICK idle-foreground polling experiment also failed the
 2,048-cycle paired case and passed at 4,096; it was not adopted. Its source,
 model commands and limits are in the linked Windows toolchain evidence.
+
+### Downstream instruction-cost use - 2026-11-16
+
+ClasSICK's [pinned canonical receipt](https://github.com/segaboy/ClasSICK-0.97/blob/86e6d2c/docs/development/windows-m68k-toolchain-20261114.md#interrupt-mask-and-instruction-cost-investigation-2026-11-16)
+records use of the mask/step witness to attribute complete SCC interrupt spans
+to its own linked symbols. Original inbox changes shortened the selected spans
+about 11%, while the fast-input failure remained. Traced/plain full state and
+frames match; a further sampling refactor regressed and was rejected. The
+receipt owns exact identities and commands. This is a downstream tool result,
+not proof of hardware timing, emulator accuracy or release qualification.
+The port's polling title provides a separate IPL7 control in its
+`docs/mouse-title-evidence.md`; game-derived source was not transferred.
