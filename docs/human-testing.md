@@ -13,6 +13,31 @@ Held keys receive releases on focus loss, cancellation, minimization and close. 
 
 The Mac mouse captures a held primary button until release and clamps captured motion at viewport edges. Leaving and reentering without a held button resets its relative anchor. The existing window has fixed integer sizing and no caption-drag/resize loop; scale is 1–4 and reduced when needed to fit the primary work area. It can be minimized and closed. No NES live mode, audio playback, save states, or physical-hardware qualification is added.
 
+For unrestricted relative mouse travel, add **`--capture-mouse`** to the
+launcher (CLI: `--live-mouse relative`). Click inside the active Mac window to
+capture; that click is consumed. The title shows the capture state. **F12
+releases the mouse**, and another click recaptures it. Focus loss, minimization,
+close and normal stop also release it. While captured, the host pointer is
+confined to the owned client area and hidden; foreground raw deltas continue
+at its boundaries. F12 is a host control and is not sent to the guest.
+
+This optional mode maps relative device counts to guest motion at the actual
+integer display scale, retaining fractional counts. It does not apply Windows
+pointer acceleration, so sensitivity can differ from the normal desktop.
+Legacy movement messages are ignored while this mode is enabled, preventing
+double motion; primary-button messages keep Windows' configured primary-button
+meaning. Absolute-coordinate raw devices are currently rejected with an explicit
+`input_error`, as are capture/read failures. There is no silent fallback.
+The previous clip rectangle is restored on release if BootHush still owns it.
+The default `window` mode and headless event/replay formats remain unchanged.
+
+The `relative_mouse` JSON object records raw packet count, captures, releases
+and whether capture was active at the final guest boundary before cleanup.
+Accepted scaled deltas enter the ordinary quadrature bridge and mouse trace;
+this does not bypass the guest's driver or guarantee its processing rate.
+The [relative-mouse receipt](relative-mouse-20261116.md) records the first
+human failure, the subsequent fixes and remaining qualification.
+
 ## Launch and retain evidence
 
 From PowerShell, with Python 3.11 or later, choose existing images and a new output directory:

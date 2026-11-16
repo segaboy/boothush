@@ -28,6 +28,7 @@ def parser():
         p.add_argument('--' + name, type=Path)
     p.add_argument('--seconds', type=int, default=120, help='guest duration, 1-300 seconds')
     p.add_argument('--scale', type=int, choices=range(1, 5), default=2)
+    p.add_argument('--capture-mouse', action='store_true', help='Mac foreground raw mouse capture; click captures, F12 releases')
     p.add_argument('--record-seconds', type=int, default=0, help='record first N guest seconds at 5 fps')
     p.add_argument('--mouse-edge-cycles', type=int, default=8192)
     p.add_argument('--mouse-dcd-invert', type=int, choices=range(4), default=0)
@@ -47,6 +48,8 @@ def main(argv=None):
         p.error('Mac requires a ROM and does not support hard-disk or ega-font')
     if a.machine == 'pc286' and not (a.rom or a.floppy or a.hard_disk):
         p.error('286 requires a ROM, floppy or hard disk')
+    if a.capture_mouse and a.machine != 'mac128k':
+        p.error('capture-mouse requires mac128k')
     sources = {'launcher': Path(__file__).resolve(), 'python': Path(sys.executable).resolve()}
     for name in ('emulator', 'rom', 'floppy', 'hard_disk', 'ega_font', 'ffmpeg'):
         value = getattr(a, name)
@@ -70,6 +73,8 @@ def main(argv=None):
             cmd += ['--' + name.replace('_', '-'), str(getattr(a, name))]
     for value in a.inspect:
         cmd += ['--inspect', value]
+    if a.capture_mouse:
+        cmd += ['--live-mouse', 'relative']
     if a.machine == 'mac128k':
         cmd += ['--mouse-record', str(run / 'mouse.bhmouse'),
                 '--mouse-edge-cycles', str(a.mouse_edge_cycles),
@@ -92,6 +97,8 @@ def main(argv=None):
                 args += ['--' + name.replace('_', '-'), str(getattr(a, name))]
         for value in a.inspect:
             args += ['--inspect', value]
+        if a.capture_mouse:
+            args += ['--capture-mouse']
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
         # Guard the reviewed inputs before opening a visible window.
         lines = ["$ErrorActionPreference = 'Stop'"]

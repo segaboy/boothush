@@ -132,6 +132,7 @@ struct request {
     bool stop_at_post;
     uint32_t target_post;
     uint32_t live_scale;
+    bool live_mouse_set, live_mouse_relative;
     uint32_t mouse_edge_cycles;
     uint32_t mouse_vbl_guard;
     uint32_t mouse_witness_first;
@@ -179,6 +180,7 @@ struct mouse_session {
     size_t pending_keys;
     uint64_t live_keys,live_key_bytes,live_focus_releases;
     unsigned focus_losses;
+    mac_live_pointer_state pointer_state;
     struct { uint64_t cycle; bh_live_key key; } key_log[4096];
     size_t key_log_count;
     mac_mouse_trace *record;
@@ -522,6 +524,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
                 return "live requires a window scale from 1 to 4";
             }
             request->live_scale = fields[0];
+        } else if (wcscmp(option,L"--live-mouse")==0 && !request->live_mouse_set) {
+            if(wcscmp(value,L"relative") && wcscmp(value,L"window"))return "live-mouse requires relative or window";
+            request->live_mouse_set=true;request->live_mouse_relative=wcscmp(value,L"relative")==0;
         } else if (wcscmp(option, L"--mouse-record") == 0 && request->mouse_record_path == NULL) {
             request->mouse_record_path = value;
         } else if (wcscmp(option, L"--live-key-log") == 0 && request->live_key_log_path == NULL) {
@@ -720,6 +725,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         return "input events must precede the cycle limit";
     }
     if(request->live_key_log_path && !request->live_scale)return "live-key-log requires live input";
+    if(request->live_mouse_set && (!request->live_scale || request->machine!=MACHINE_MAC128K))return "live-mouse requires live mac128k";
     const bool mouse_bridge = (request->live_scale && request->machine==MACHINE_MAC128K) || request->relative_motion || request->mouse_replay_path || request->window_input;
     const bool mouse_settings = request->mouse_edge_cycles || request->mouse_invert_set ||
                                 request->mouse_guard_set;
@@ -1157,6 +1163,7 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         if (mouse->window == NULL) {
             return "cannot create the live Mac window";
         }
+        if(request->live_mouse_relative && !mac_live_window_relative_mode(mouse->window,true))return "cannot enable relative mouse capture";
     }
     if (request->window_input) {
         mouse->injected_window = true;
@@ -1360,6 +1367,8 @@ static void print_result(const char *status, enum machine_kind machine,
                ",\"focus_losses\":%u,\"pending_keys\":%zu,\"logged_keys\":%zu}",
                mouse->scheduled,mouse->live_keys,mouse->live_key_bytes,mouse->live_focus_releases,
                mouse->focus_losses,mouse->pending_keys,mouse->key_log_count);
+        if(mouse->request->live_mouse_relative)printf(",\"relative_mouse\":{\"packets\":%" PRIu64 ",\"captures\":%u,\"releases\":%u,\"captured_at_stop\":%s}",
+            mouse->pointer_state.packets,mouse->pointer_state.captures,mouse->pointer_state.releases,mouse->pointer_state.captured?"true":"false");
     }
     if (machine == MACHINE_PC286 && mouse != NULL && mouse->scheduled != 0) {
         const size_t rejected = mouse->scheduled_rejected ? 1u : 0u;
@@ -1468,7 +1477,7 @@ static mac_live_status refresh_live(struct machine *machine, struct mouse_sessio
                                     struct machine_state state, uint64_t *presented_vbl)
 {
     const mac_live_status status = mac_live_window_pump(mouse->window);
-    if (status == MAC_LIVE_INPUT_OVERFLOW) {
+    if (status == MAC_LIVE_INPUT_OVERFLOW || status==MAC_LIVE_INPUT_ERROR) {
         return status;
     }
     const uint64_t frame_index=machine->mac?state.vbl:state.cycles/120000;
@@ -1657,6 +1666,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                 if (status == MAC_LIVE_INPUT_OVERFLOW) {
                     return (struct run_result){"input_overflow", "live input or recording queue is full", 1};
                 }
+                if(status==MAC_LIVE_INPUT_ERROR)return (struct run_result){"input_error","relative mouse capture/read failed or device is absolute",1};
             }
             live_target = (uint64_t)((double)elapsed * (machine->mac?MAC_CLOCK_HZ:6000000) / (double)frequency.QuadPart);
             if (live_target <= state.cycles) {
@@ -2355,6 +2365,7 @@ int wmain(int argc, wchar_t **argv)
              "  --mouse-dcd-invert MASK\n"
              "  --input-after ADDRESS:WIDTH:VALUE (scheduled input offsets from readiness)\n"
              "Human input: --live SCALE (Mac mouse/keyboard or 286 keyboard); --live-key-log NEW_PATH\n"
+             "Mac capture: --live-mouse relative (click captures; F12 releases) or window (default)\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
@@ -2479,6 +2490,7 @@ int wmain(int argc, wchar_t **argv)
     if (video != NULL && !video_finish(video, video->failed))
         result = (struct run_result){"error", "cannot close requested video", 2};
     if (mouse.window != NULL) {
+        mouse.pointer_state=mac_live_window_pointer_state(mouse.window);
         mouse.pending_keys=bh_live_window_pending_keys(mouse.window)+(mouse.key_pending?1:0);
         mouse.focus_losses=bh_live_window_focus_losses(mouse.window);
         mac_live_window_destroy(mouse.window);

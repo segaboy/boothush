@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 namespace {
+bh_live_window *test_window=nullptr;
 struct Find {const wchar_t *name;HWND result;};
 BOOL CALLBACK find(HWND h,LPARAM p)
 {
@@ -14,6 +15,12 @@ BOOL CALLBACK find(HWND h,LPARAM p)
 void CALLBACK input(HWND h,UINT,UINT_PTR timer,DWORD)
 {
     KillTimer(h,timer);
+    wchar_t relative[2]{};
+    if(GetEnvironmentVariableW(L"BOOTHUSH_TEST_RELATIVE",relative,2)==1 && relative[0]==L'1') {
+        SendMessageW(h,WM_KEYDOWN,VK_F12,1);
+        if(!mac_live_window_inject_relative(test_window,64,0))PostMessageW(h,WM_CLOSE,0,0);
+        SendMessageW(h,WM_KEYDOWN,VK_F12,1);
+    }
     // A then F down; focus loss must deliver both releases. A later close
     // lets the guest observe all transitions before final inspection.
     PostMessageW(h,WM_KEYDOWN,'A',1);PostMessageW(h,WM_KEYDOWN,'F',1);
@@ -24,6 +31,7 @@ bh_live_window *create(bh_live_profile profile,unsigned scale,bool visible)
 {
     if(!visible)return nullptr;
     auto *w=bh_live_window_create(profile,scale,false);if(!w)return nullptr;
+    test_window=w;
     Find f{profile==BH_LIVE_PC286?L"BootHushPC286LiveWindow":L"BootHushMac128KLiveWindow",nullptr};
     EnumThreadWindows(GetCurrentThreadId(),find,reinterpret_cast<LPARAM>(&f));
     // Optional bounded delay for slower original integration guests. This is

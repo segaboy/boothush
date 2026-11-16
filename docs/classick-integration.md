@@ -8,6 +8,12 @@ Normal runs are headless and return one JSON result. When launching from Python 
 
 The owner's 2026-11-16 human-testing requirement is implemented for Mac mouse/keyboard and 286 keyboard/EGA. [Human testing](human-testing.md) describes the launcher, key log, capture workflow, and held-key/focus behavior. Hidden native-window fixtures exercise the input and rendering path; these are automated checks and do not qualify the paired release. Keep the exact emulator and guest hashes, completed human observations, and unresolved defects with the qualification record. The earlier paired review package remains unchanged.
 
+The first actual Mac human round found pointer lag and incomplete boundary
+reach. [Relative mouse capture](relative-mouse-20261116.md) adds an explicit
+foreground raw-input path with F12 release; ClasSICK separately experiments
+with a larger acquisition FIFO. The original human failure is retained and
+neither change is a human pass until retested.
+
 Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. The separate experimental [NES target](nes.md) uses instruction-bounded `--steps`, two scheduled controllers and stopped CPU/PPU/OAM observations for porting research. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
 
 ## Current Mac/286 direction

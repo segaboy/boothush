@@ -97,6 +97,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--window-mouse CYCLE:X:Y:ACTION` | Macintosh only. Deliver a logical mouse event to an invisible owned window at a guest cycle. Actions are 0 for unpressed movement, 1 for primary press, 2 for held movement, and 3 for release. X is 0–511 and Y is 0–341. Events must be in cycle order. |
 | `--live SCALE` | Open an opt-in native window at integer scale 1–4: Mac mouse and keyboard (7.8336 MHz), or 286 keyboard and EGA display (6 MHz). See [human testing](docs/human-testing.md) for supported keys and evidence. |
 | `--live-key-log PATH` | With `--live`, save accepted keyboard transitions and guest cycles to a new `BHLIVEKEY1` file. This is not a human-verification claim. |
+| `--live-mouse relative` | Mac live mode only: click to capture foreground raw relative motion; F12 releases. Travel continues when the host pointer reaches the viewport boundary. `window` retains the default legacy coordinate path. |
 | `--mouse-record PATH` | With `--live`, `--window-mouse`, or `--mouse-motion`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |

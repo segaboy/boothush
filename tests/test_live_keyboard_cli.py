@@ -11,6 +11,21 @@ from test_mac_keyboard_integration import (make_keyboard_rom,move_byte,exchange,
 
 @unittest.skipUnless(os.environ.get('BOOTHUSH_LIVE_KEY_TEST_EXE'),'hidden live-key CLI binary not supplied')
 class LiveKeyTests(BootHushTestCase):
+    def test_relative_mouse_reaches_record_and_replay(self):
+        trace=self.scratch/'relative.bhmouse';frame=self.scratch/'relative.pbm'
+        env=os.environ.copy();env['BOOTHUSH_TEST_RELATIVE']='1'
+        cmd=[env['BOOTHUSH_LIVE_KEY_TEST_EXE'],'--machine','mac128k','--rom',str(self.rom),
+             '--live','1','--live-mouse','relative','--mouse-record',str(trace),'--frame',str(frame),
+             '--cycles','20000000','--timeout-ms','5000','--inspect','0xb00:4']
+        r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(r.returncode,0,(r.stdout,r.stderr));data=json.loads(r.stdout)
+        self.assertEqual(data['relative_mouse'],{'packets':1,'captures':1,'releases':1,'captured_at_stop':False})
+        self.assertEqual(data['mouse'],{'samples':1,'steps':128,'pending':0})
+        self.assertEqual(list(map(int,trace.read_text().splitlines()[1].split()))[1:],[64,0,0])
+        replay_frame=self.scratch/'replay.pbm'
+        replay=self.boot('--mouse-replay',trace,'--frame',replay_frame,'--inspect','0xb00:4',cycles=20000000,timeout_ms=5000)
+        self.assertEqual(replay['memory'],data['memory']);self.assertEqual(frame.read_bytes(),replay_frame.read_bytes())
+
     def test_keys_reach_both_guests_and_focus_releases_are_recorded(self):
         for machine in ('mac128k','pc286'):
             with self.subTest(machine=machine):
@@ -42,7 +57,7 @@ class LiveKeyTests(BootHushTestCase):
 
     def test_log_requires_live_and_pc_live_refuses_scheduled_input(self):
         rom=self.scratch/'pc.rom';rom.write_bytes(pc_rom(bytes.fromhex('ebfe')))
-        for options in (['--live-key-log',str(self.scratch/'bad.log')],['--live','1','--scancode','100:0x29']):
+        for options in (['--live-key-log',str(self.scratch/'bad.log')],['--live','1','--scancode','100:0x29'],['--live','1','--live-mouse','relative']):
             r=subprocess.run([os.environ['BOOTHUSH_EXE'],'--machine','pc286','--rom',str(rom),
                 '--cycles','10000','--timeout-ms','1000',*options],capture_output=True,text=True,timeout=5,
                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))

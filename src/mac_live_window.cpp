@@ -78,6 +78,11 @@ struct mac_live_window {
     const bool is_pc;
     const int width,height;
     bool input_overflow = false;
+    bool input_error = false;
+    mac_live_pointer_state relative{};
+    bool capture_click_up = false;
+    int64_t remainder_x = 0, remainder_y = 0;
+    RECT previous_clip{}, owned_clip{};
     bool active = false;
     bool anchored = false;
     bool tracking_leave = false;
@@ -108,11 +113,63 @@ struct mac_live_window {
 
     void abandon_input(bool release_capture)
     {
+        end_relative();
         anchored = false;
         change_button(false);
         if (release_capture && GetCapture() == hwnd) {
             ReleaseCapture();
         }
+    }
+
+    void relative_title() const
+    {
+        if(hwnd && relative.enabled)SetWindowTextW(hwnd,relative.captured?
+            L"BootHush \u2014 Macintosh 128K | Mouse captured; F12 releases":
+            L"BootHush \u2014 Macintosh 128K | Click to capture mouse; F12 releases");
+    }
+    void end_relative()
+    {
+        if(!relative.captured)return;
+        relative.captured=false;++relative.releases;
+        remainder_x=remainder_y=0;capture_click_up=false;
+        if(visible) {
+            RAWINPUTDEVICE device{1,2,RIDEV_REMOVE,nullptr};
+            RegisterRawInputDevices(&device,1,sizeof(device));
+            RECT current{};
+            if(GetClipCursor(&current) && EqualRect(&current,&owned_clip))ClipCursor(&previous_clip);
+            SetCursor(LoadCursorW(nullptr,MAKEINTRESOURCEW(32512)));
+        }
+        relative_title();
+    }
+    bool begin_relative()
+    {
+        if(!relative.enabled || !accepts_input() || relative.captured)return relative.captured;
+        if(visible) {
+            RECT client{};POINT corners[2]{};
+            if(!GetClientRect(hwnd,&client) || !GetClipCursor(&previous_clip))return false;
+            corners[0]={client.left,client.top};corners[1]={client.right,client.bottom};
+            if(!ClientToScreen(hwnd,&corners[0]) || !ClientToScreen(hwnd,&corners[1]))return false;
+            owned_clip={corners[0].x,corners[0].y,corners[1].x,corners[1].y};
+            // Foreground-only registration; retain native button messages.
+            RAWINPUTDEVICE device{1,2,0,hwnd};
+            if(!RegisterRawInputDevices(&device,1,sizeof(device)))return false;
+            if(!ClipCursor(&owned_clip)) {
+                device.dwFlags=RIDEV_REMOVE;device.hwndTarget=nullptr;
+                RegisterRawInputDevices(&device,1,sizeof(device));return false;
+            }
+            SetCursor(nullptr);
+        }
+        remainder_x=remainder_y=0;relative.captured=true;++relative.captures;
+        anchored=false;relative_title();return true;
+    }
+    void relative_motion(int32_t dx,int32_t dy)
+    {
+        if(!relative.captured || !accepts_input())return;
+        RECT client{};if(!GetClientRect(hwnd,&client)){input_error=true;return;}
+        const int scale=viewport(client).scale;
+        const int64_t x=remainder_x+dx,y=remainder_y+dy;
+        remainder_x=x%scale;remainder_y=y%scale;++relative.packets;
+        if(x/scale || y/scale)enqueue({static_cast<int32_t>(x/scale),static_cast<int32_t>(y/scale),false,pressed});
     }
 
     void enqueue_key(bh_live_key key)
@@ -299,8 +356,27 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         break;
     case WM_KEYDOWN:
     case WM_KEYUP:
+        if(window->relative.enabled && wparam==VK_F12) {
+            if(message==WM_KEYDOWN && !(lparam&(1L<<30))) {
+                if(window->relative.captured){window->abandon_input(true);window->release_keys();}
+                else if(!window->begin_relative())window->input_error=true;
+            }
+            return 0;
+        }
         window->keyboard(message,wparam,lparam);
         return 0;
+    case WM_INPUT:
+        if(window->relative.captured && GET_RAWINPUT_CODE_WPARAM(wparam)==RIM_INPUT) {
+            RAWINPUT input{};UINT size=sizeof(input);
+            const UINT read=GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam),RID_INPUT,&input,&size,sizeof(RAWINPUTHEADER));
+            if(read==static_cast<UINT>(-1) || read<sizeof(RAWINPUTHEADER)+sizeof(RAWMOUSE) || input.header.dwType!=RIM_TYPEMOUSE)
+                window->input_error=true;
+            else if(input.data.mouse.usFlags&MOUSE_MOVE_ABSOLUTE)
+                window->input_error=true; // No fabricated relative motion for absolute devices.
+            else window->relative_motion(input.data.mouse.lLastX,input.data.mouse.lLastY);
+        }
+        // Foreground raw-input handles require the system cleanup path.
+        return DefWindowProcW(hwnd,message,wparam,lparam);
     case WM_CAPTURECHANGED:
         if (reinterpret_cast<HWND>(lparam) != hwnd && window->pressed) {
             window->abandon_input(false);
@@ -308,6 +384,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         break;
     case WM_MOUSEMOVE:
         if(window->is_pc)break;
+        if(window->relative.enabled)return 0;
         if (window->accepts_input()) {
             if (window->pressed && (wparam & MK_LBUTTON) == 0) {
                 window->abandon_input(true);
@@ -317,6 +394,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     case WM_LBUTTONDOWN:
         if(window->is_pc)break;
+        if(window->relative.enabled) {
+            if(!window->relative.captured) {
+                if(!window->begin_relative())window->input_error=true;
+                else window->capture_click_up=true;
+            }else if(!window->capture_click_up)window->change_button(true);
+            return 0;
+        }
         // Win32 already maps the configured physical primary to left-button messages.
         if (window->accepts_input() && !window->pressed && window->pointer_position(lparam, false)) {
             if (window->visible) {
@@ -329,6 +413,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     case WM_LBUTTONUP:
         if(window->is_pc)break;
+        if(window->relative.enabled) {
+            if(window->capture_click_up)window->capture_click_up=false;
+            else window->change_button(false);
+            return 0;
+        }
         if (window->pressed) {
             window->pointer_position(lparam, window->captured());
             window->change_button(false);
@@ -349,7 +438,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         }
         return 0;
     case WM_SETCURSOR:
-        if (!window->is_pc && window->active && LOWORD(lparam) == HTCLIENT) {
+        if (!window->is_pc && window->active && (!window->relative.enabled || window->relative.captured) && LOWORD(lparam) == HTCLIENT) {
             POINT pointer{};
             RECT client{};
             if (GetCursorPos(&pointer) && ScreenToClient(hwnd, &pointer) &&
@@ -390,6 +479,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     }
     case WM_MOVE:
+        if(window->relative.captured)window->abandon_input(true);
         window->anchored = false;
         break;
     case WM_SIZE:
@@ -508,11 +598,31 @@ mac_live_status mac_live_window_pump(mac_live_window *window)
         }
         DispatchMessageW(&pending);
     }
+    if(window->input_error){window->abandon_input(true);return MAC_LIVE_INPUT_ERROR;}
     if (window->input_overflow) {
         window->abandon_input(true);
         return MAC_LIVE_INPUT_OVERFLOW;
     }
     return window->hwnd != nullptr ? MAC_LIVE_RUNNING : MAC_LIVE_CLOSED;
+}
+
+bool mac_live_window_relative_mode(mac_live_window *window,bool enabled)
+{
+    if(!window || window->is_pc || !window->hwnd)return false;
+    window->abandon_input(true);window->relative.enabled=enabled;
+    if(enabled)window->relative_title();else SetWindowTextW(window->hwnd,title);
+    return true;
+}
+
+mac_live_pointer_state mac_live_window_pointer_state(const mac_live_window *window)
+{
+    return window?window->relative:mac_live_pointer_state{};
+}
+
+bool mac_live_window_inject_relative(mac_live_window *window,int32_t dx,int32_t dy)
+{
+    if(!window || window->visible || !window->hwnd || !window->relative.captured)return false;
+    window->relative_motion(dx,dy);return !window->input_error && !window->input_overflow;
 }
 
 bool mac_live_window_next_event(mac_live_window *window, mac_live_event *event)

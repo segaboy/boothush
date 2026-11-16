@@ -15,14 +15,16 @@ class HumanPlanTests(BootHushTestCase):
     def test_preparation_does_not_run_and_refuses_overwrite(self):
         out = self.scratch / "plan with 'quote"
         cmd = [sys.executable, '-B', str(SCRIPT), '--emulator', str(self.exe), '--machine', 'mac128k',
-               '--rom', str(self.rom), '--output', str(out), '--prepare-only']
+               '--rom', str(self.rom), '--output', str(out), '--prepare-only','--capture-mouse']
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads((out / 'plan.json').read_text())
         self.assertEqual(plan['status'], 'prepared'); self.assertFalse(plan['human_verified'])
+        self.assertIn('--live-mouse',plan['command'])
         self.assertFalse((out / 'session').exists())
         launch = (out / 'launch.ps1').read_text()
         self.assertIn("plan with ''quote", launch); self.assertIn('Get-FileHash -LiteralPath', launch)
+        self.assertIn('--capture-mouse',launch)
         original = (out / 'plan.json').read_bytes()
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0); self.assertEqual((out / 'plan.json').read_bytes(), original)

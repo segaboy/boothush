@@ -23,7 +23,20 @@ typedef enum {
     MAC_LIVE_RUNNING,
     MAC_LIVE_CLOSED,
     MAC_LIVE_INPUT_OVERFLOW,
+    MAC_LIVE_INPUT_ERROR,
 } mac_live_status;
+
+typedef struct {
+    bool enabled, captured;
+    uint64_t packets;
+    unsigned captures, releases;
+} mac_live_pointer_state;
+
+/* Optional foreground relative mouse capture. F12 releases; click recaptures. */
+bool mac_live_window_relative_mode(mac_live_window *window,bool enabled);
+mac_live_pointer_state mac_live_window_pointer_state(const mac_live_window *window);
+/* Hidden-test counterpart to a relative RAWMOUSE packet; never global input. */
+bool mac_live_window_inject_relative(mac_live_window *window,int32_t dx,int32_t dy);
 
 /* Call all functions on the thread that creates the window. Scale is 1 through 4. */
 mac_live_window *mac_live_window_create(unsigned scale, bool visible);
