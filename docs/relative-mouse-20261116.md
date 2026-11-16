@@ -90,3 +90,36 @@ limit with zero errors and zero input. UI inspection timed out before any
 agent action; this is only an idle launch result, not a successful capture
 or human test. M1R2 will separately test actual input with the unchanged
 enlarged-FIFO Mac ROM. Physical/raw-device behavior and human feel remain open.
+
+## M1R2 sensitivity feedback and adjustable gain
+
+The owner reached all four corners without unexpected closure, but reported
+having to move the local pointer "VERY far." M1R2 retained 1210 raw packets,
+two starts/releases, 1055 scaled samples and 4704 pin steps, with no pending
+input, guest omissions, decoder losses, FIFO overflows or faults. Complete
+movement accounting did not mean the sensitivity was acceptable. Session,
+owner feedback and a guest-video GIF excerpt remain under
+`out/qualification-20261116-a/M1R2-mac`; the derived-media receipt identifies
+the excerpt's source and conversion. No desktop pixels were retained.
+
+`--live-mouse-gain` / launcher `--mouse-gain-percent` now selects 25-800 percent
+linear gain, default 100. F9 halves and F10 doubles it within those bounds;
+the title and JSON identify the setting. Gain acts before integer display-scale
+conversion. Signed fractional carry preserves small movements, a gain change
+clears only the partial fraction, repeated shortcuts are suppressed, and these
+host keys never enter the guest. Out-of-range signed output fails explicitly.
+Scaled vectors use the existing replay format; replay never applies gain twice.
+
+Source-matched active-profile twins:
+`fe262bc58ae58cb1d9b22ae5f409b71693e6ebf0fd305e4846692a5873588de8`.
+Receipts: `C:/Repos/.task-temp/boothush-mouse-gain-20261116-a`.
+Four native tests and six focused Python modules pass, including low-gain
+fractions, 400-percent conversion, repeat suppression, bounds, overflow
+rejection, inactive shortcuts, gain reporting and exact mouse replay.
+
+Amplifying the recorded accepted vectors exposed separate guest FIFO loss
+at 2x/4x. ClasSICK's selected 2048-record candidate passes the 1x/2x/4x controls,
+paired state/pixel comparison and excessive-burst recovery. Its canonical
+guided-human receipt records the failed smaller-buffer controls and new ROM
+identity. This is not a universal input-rate or latency guarantee. M1R3 starts
+at 400 percent with that candidate; human sensitivity remains pending.

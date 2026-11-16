@@ -24,6 +24,15 @@ at its boundaries. F12 is a host control and is not sent to the guest.
 This optional mode maps relative device counts to guest motion at the actual
 integer display scale, retaining fractional counts. It does not apply Windows
 pointer acceleration, so sensitivity can differ from the normal desktop.
+Use launcher `--mouse-gain-percent 400` (CLI `--live-mouse-gain 400`) for four
+times the previous movement. Range: 25-800 percent, default 100. While the
+window is active, **F9 halves sensitivity** and **F10 doubles it** within those
+bounds, without restarting. The title displays the current percentage. These
+host shortcuts and their repeats are not sent to the guest. Speed changes
+discard only the subpixel remainder; already queued motion is retained.
+The conversion is `raw_counts * gain_percent / (100 * display_scale)` with
+signed fractional carry. This is linear sensitivity, not desktop acceleration
+or an absolute mapping between Windows and guest pointer positions.
 Legacy movement messages are ignored while this mode is enabled, preventing
 double motion; primary-button messages keep Windows' configured primary-button
 meaning. Absolute-coordinate raw devices are currently rejected with an explicit
@@ -47,6 +56,10 @@ and whether capture was active at the final guest boundary before cleanup.
 `relative_mouse_mode` distinguishes `confined` and `unconfined`. Failure adds
 `relative_mouse_error` with the specific operation and Win32 error code;
 inactive clicks/shortcuts are ignored, not reported as API failures.
+`relative_mouse_gain` records initial/final percentages and the number of
+runtime changes. Mouse trace vectors are already scaled, so headless replay
+must not apply gain again. A scaled vector outside signed 32-bit range stops
+with an explicit error instead of wrapping or clamping silently.
 Accepted scaled deltas enter the ordinary quadrature bridge and mouse trace;
 this does not bypass the guest's driver or guarantee its processing rate.
 The [relative-mouse receipt](relative-mouse-20261116.md) records the first

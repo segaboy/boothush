@@ -15,6 +15,7 @@ BOOL CALLBACK find(HWND h,LPARAM p)
 void CALLBACK input(HWND h,UINT,UINT_PTR timer,DWORD)
 {
     KillTimer(h,timer);
+    unsigned close_delay=200;
     wchar_t relative[2]{};
     if(GetEnvironmentVariableW(L"BOOTHUSH_TEST_RELATIVE_ERROR",relative,2)==1 && relative[0]==L'1') {
         SendMessageW(h,WM_KEYDOWN,VK_F12,1);
@@ -22,6 +23,7 @@ void CALLBACK input(HWND h,UINT,UINT_PTR timer,DWORD)
         return;
     }
     if(GetEnvironmentVariableW(L"BOOTHUSH_TEST_RELATIVE",relative,2)==1 && relative[0]==L'1') {
+        close_delay=750; // Permit the 400-percent trace to drain through quadrature.
         SendMessageW(h,WM_KEYDOWN,VK_F12,1);
         if(!mac_live_window_inject_relative(test_window,64,0))PostMessageW(h,WM_CLOSE,0,0);
         SendMessageW(h,WM_KEYDOWN,VK_F12,1);
@@ -30,7 +32,7 @@ void CALLBACK input(HWND h,UINT,UINT_PTR timer,DWORD)
     // lets the guest observe all transitions before final inspection.
     PostMessageW(h,WM_KEYDOWN,'A',1);PostMessageW(h,WM_KEYDOWN,'F',1);
     PostMessageW(h,WM_KILLFOCUS,0,0);
-    SetTimer(h,2,200,[](HWND w,UINT,UINT_PTR id,DWORD){KillTimer(w,id);PostMessageW(w,WM_CLOSE,0,0);});
+    SetTimer(h,2,close_delay,[](HWND w,UINT,UINT_PTR id,DWORD){KillTimer(w,id);PostMessageW(w,WM_CLOSE,0,0);});
 }
 bh_live_window *create(bh_live_profile profile,unsigned scale,bool visible)
 {

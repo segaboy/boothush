@@ -68,6 +68,8 @@ int main()
         fixture::reset();fixture::window=reinterpret_cast<LONG_PTR>(&free);free.active=false;
         window_proc(free.hwnd,WM_LBUTTONDOWN,MK_LBUTTON,0);
         window_proc(free.hwnd,WM_KEYDOWN,VK_F12,1);
+        window_proc(free.hwnd,WM_KEYDOWN,VK_F10,1);
+        check(free.relative.gain_percent==100,"inactive shortcut changed gain");
         check(!free.input_error && !free.relative.captured && fixture::registrations==0,"inactive input treated as capture failure");
         std::cout<<"Capture setup, API denial/rollback, unconfined mode and inactive input checks passed.\n";
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}

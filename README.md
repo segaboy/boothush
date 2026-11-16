@@ -99,6 +99,7 @@ Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC ac
 | `--live-key-log PATH` | With `--live`, save accepted keyboard transitions and guest cycles to a new `BHLIVEKEY1` file. This is not a human-verification claim. |
 | `--live-mouse relative` | Mac live mode only: click to capture foreground raw relative motion; F12 releases. Travel continues when the host pointer reaches the viewport boundary. `window` retains the default legacy coordinate path. |
 | `--live-mouse relative-free` | Explicit unconfined relative input. The host cursor stays visible and free; no cursor confinement permission is needed. Click inside to start, F12 to stop. |
+| `--live-mouse-gain PERCENT` | Relative modes only, 25-800 (default 100). Linear sensitivity before display-scale conversion. F9 halves it and F10 doubles it; the title shows the current value. |
 | `--mouse-record PATH` | With `--live`, `--window-mouse`, or `--mouse-motion`, write the accepted mouse samples and their guest cycles to a new trace file. |
 | `--mouse-replay PATH` | Macintosh only. Replay a recorded trace headlessly with its saved mouse timing and polarity. The recorded end cycle caps the replay. |
 | `--mouse-witness PATH` | Macintosh only. Write a device trace with applied mouse pins, SCC/VIA accesses, and IRQ changes to a new file. Works with live, replay, raw phases, or no input. |

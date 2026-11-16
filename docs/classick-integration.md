@@ -16,6 +16,10 @@ neither change is a human pass until retested.
 The next human round found confinement startup failure (`ClipCursor`, error 5).
 The same receipt records the explicit `relative-free` mode for hosts where
 confinement is unavailable, precise API diagnostics and pending human retest.
+M1R2 reached all corners without closure by owner report and had zero guest
+loss/overflow counters, but the owner reported excessive mouse travel. Relative
+motion gain and F9/F10 adjustment now support a focused sensitivity retest;
+the same receipt retains the failure and exact candidate identities.
 
 Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each guest starts from reset. A PC may use an original raw floppy or hard disk and the built-in firmware. A Mac requires a 65,536-byte ROM. The separate experimental [NES target](nes.md) uses instruction-bounded `--steps`, two scheduled controllers and stopped CPU/PPU/OAM observations for porting research. ROMs, media, and generated output files stay outside the repository. Snapshot and trace outputs require new paths.
 

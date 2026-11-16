@@ -133,6 +133,7 @@ struct request {
     uint32_t target_post;
     uint32_t live_scale;
     bool live_mouse_set, live_mouse_relative, live_mouse_unconfined;
+    uint32_t live_mouse_gain;
     uint32_t mouse_edge_cycles;
     uint32_t mouse_vbl_guard;
     uint32_t mouse_witness_first;
@@ -528,6 +529,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             if(wcscmp(value,L"relative") && wcscmp(value,L"relative-free") && wcscmp(value,L"window"))return "live-mouse requires relative, relative-free or window";
             request->live_mouse_set=true;request->live_mouse_relative=wcscmp(value,L"window")!=0;
             request->live_mouse_unconfined=wcscmp(value,L"relative-free")==0;
+        } else if(wcscmp(option,L"--live-mouse-gain")==0 && !request->live_mouse_gain) {
+            if(!parse_fields(value,fields,1) || fields[0]<25 || fields[0]>800)return "live-mouse-gain requires 25-800 percent";
+            request->live_mouse_gain=fields[0];
         } else if (wcscmp(option, L"--mouse-record") == 0 && request->mouse_record_path == NULL) {
             request->mouse_record_path = value;
         } else if (wcscmp(option, L"--live-key-log") == 0 && request->live_key_log_path == NULL) {
@@ -727,6 +731,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     }
     if(request->live_key_log_path && !request->live_scale)return "live-key-log requires live input";
     if(request->live_mouse_set && (!request->live_scale || request->machine!=MACHINE_MAC128K))return "live-mouse requires live mac128k";
+    if(request->live_mouse_gain && !request->live_mouse_relative)return "live-mouse-gain requires relative or relative-free mouse mode";
     const bool mouse_bridge = (request->live_scale && request->machine==MACHINE_MAC128K) || request->relative_motion || request->mouse_replay_path || request->window_input;
     const bool mouse_settings = request->mouse_edge_cycles || request->mouse_invert_set ||
                                 request->mouse_guard_set;
@@ -1164,7 +1169,9 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         if (mouse->window == NULL) {
             return "cannot create the live Mac window";
         }
-        if(request->live_mouse_relative && !mac_live_window_relative_options(mouse->window,true,!request->live_mouse_unconfined))return "cannot enable relative mouse capture";
+        if(request->live_mouse_relative &&
+           (!mac_live_window_relative_gain(mouse->window,request->live_mouse_gain?request->live_mouse_gain:100) ||
+            !mac_live_window_relative_options(mouse->window,true,!request->live_mouse_unconfined)))return "cannot enable relative mouse capture";
     }
     if (request->window_input) {
         mouse->injected_window = true;
@@ -1373,6 +1380,8 @@ static void print_result(const char *status, enum machine_kind machine,
         if(mouse->pointer_state.failure)printf(",\"relative_mouse_error\":{\"operation\":\"%s\",\"win32_error\":%" PRIu32 "}",
             mouse->pointer_state.failure,mouse->pointer_state.win32_error);
         if(mouse->request->live_mouse_relative)printf(",\"relative_mouse_mode\":\"%s\"",mouse->request->live_mouse_unconfined?"unconfined":"confined");
+        if(mouse->request->live_mouse_relative)printf(",\"relative_mouse_gain\":{\"initial_percent\":%u,\"final_percent\":%u,\"changes\":%u}",
+            mouse->pointer_state.initial_gain_percent,mouse->pointer_state.gain_percent,mouse->pointer_state.gain_changes);
     }
     if (machine == MACHINE_PC286 && mouse != NULL && mouse->scheduled != 0) {
         const size_t rejected = mouse->scheduled_rejected ? 1u : 0u;
@@ -2371,6 +2380,7 @@ int wmain(int argc, wchar_t **argv)
              "Human input: --live SCALE (Mac mouse/keyboard or 286 keyboard); --live-key-log NEW_PATH\n"
              "Mac capture: --live-mouse relative (confined), relative-free (visible/free host pointer), or window (default)\n"
              "             Click starts relative input; F12 stops it\n"
+             "             --live-mouse-gain 25..800 percent (default 100); F9 halves / F10 doubles\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"

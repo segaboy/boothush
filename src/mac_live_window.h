@@ -30,6 +30,7 @@ typedef struct {
     bool enabled, captured, unconfined;
     uint64_t packets;
     unsigned captures, releases;
+    unsigned initial_gain_percent, gain_percent, gain_changes;
     const char *failure;
     uint32_t win32_error;
 } mac_live_pointer_state;
@@ -38,6 +39,8 @@ typedef struct {
 bool mac_live_window_relative_mode(mac_live_window *window,bool enabled);
 /* Explicit unconfined mode keeps the host pointer visible and never clips it. */
 bool mac_live_window_relative_options(mac_live_window *window,bool enabled,bool confine);
+/* Configure before enabling relative input. F9/F10 halve/double it at runtime. */
+bool mac_live_window_relative_gain(mac_live_window *window,unsigned percent);
 mac_live_pointer_state mac_live_window_pointer_state(const mac_live_window *window);
 /* Hidden-test counterpart to a relative RAWMOUSE packet; never global input. */
 bool mac_live_window_inject_relative(mac_live_window *window,int32_t dx,int32_t dy);

@@ -31,6 +31,7 @@ def parser():
     mouse = p.add_mutually_exclusive_group()
     mouse.add_argument('--capture-mouse', action='store_true', help='Mac foreground raw mouse capture; click captures, F12 releases')
     mouse.add_argument('--unconfined-mouse', action='store_true', help='Mac relative input with visible/free host pointer; click starts, F12 stops')
+    p.add_argument('--mouse-gain-percent', type=int, help='relative mouse sensitivity, 25-800 percent; F9 slower / F10 faster')
     p.add_argument('--record-seconds', type=int, default=0, help='record first N guest seconds at 5 fps')
     p.add_argument('--mouse-edge-cycles', type=int, default=8192)
     p.add_argument('--mouse-dcd-invert', type=int, choices=range(4), default=0)
@@ -52,6 +53,8 @@ def main(argv=None):
         p.error('286 requires a ROM, floppy or hard disk')
     if (a.capture_mouse or a.unconfined_mouse) and a.machine != 'mac128k':
         p.error('relative mouse modes require mac128k')
+    if a.mouse_gain_percent is not None and (not 25 <= a.mouse_gain_percent <= 800 or not (a.capture_mouse or a.unconfined_mouse)):
+        p.error('mouse-gain-percent requires a relative mouse mode and 25-800 percent')
     sources = {'launcher': Path(__file__).resolve(), 'python': Path(sys.executable).resolve()}
     for name in ('emulator', 'rom', 'floppy', 'hard_disk', 'ega_font', 'ffmpeg'):
         value = getattr(a, name)
@@ -79,6 +82,8 @@ def main(argv=None):
         cmd += ['--live-mouse', 'relative']
     elif a.unconfined_mouse:
         cmd += ['--live-mouse', 'relative-free']
+    if a.mouse_gain_percent is not None:
+        cmd += ['--live-mouse-gain', str(a.mouse_gain_percent)]
     if a.machine == 'mac128k':
         cmd += ['--mouse-record', str(run / 'mouse.bhmouse'),
                 '--mouse-edge-cycles', str(a.mouse_edge_cycles),
@@ -105,6 +110,8 @@ def main(argv=None):
             args += ['--capture-mouse']
         elif a.unconfined_mouse:
             args += ['--unconfined-mouse']
+        if a.mouse_gain_percent is not None:
+            args += ['--mouse-gain-percent', str(a.mouse_gain_percent)]
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
         # Guard the reviewed inputs before opening a visible window.
         lines = ["$ErrorActionPreference = 'Stop'"]

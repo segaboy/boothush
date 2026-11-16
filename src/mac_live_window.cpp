@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cwchar>
 #include <new>
 
 namespace {
@@ -61,7 +62,9 @@ RECT outer_size(unsigned scale, UINT dpi, int width=frame_width, int height=fram
 } // namespace
 
 struct mac_live_window {
-    mac_live_window(bool show, bool pc) : visible(show), is_pc(pc), width(pc?640:512), height(pc?350:342) {}
+    mac_live_window(bool show, bool pc) : visible(show), is_pc(pc), width(pc?640:512), height(pc?350:342) {
+        relative.initial_gain_percent=relative.gain_percent=100;
+    }
 
     HWND hwnd = nullptr;
     std::array<uint8_t, MAC128K_FRAME_SIZE> frame{};
@@ -123,15 +126,20 @@ struct mac_live_window {
 
     void relative_title() const
     {
-        if(hwnd && relative.enabled && relative.unconfined) {
-            SetWindowTextW(hwnd,relative.captured?
-                L"BootHush \u2014 Macintosh 128K | Relative input ON (unconfined); F12 stops":
-                L"BootHush \u2014 Macintosh 128K | Click for relative input (unconfined); F12 stops");
-            return;
-        }
-        if(hwnd && relative.enabled)SetWindowTextW(hwnd,relative.captured?
-            L"BootHush \u2014 Macintosh 128K | Mouse captured; F12 releases":
-            L"BootHush \u2014 Macintosh 128K | Click to capture mouse; F12 releases");
+        if(!hwnd || !relative.enabled)return;
+        wchar_t caption[192]{};
+        std::swprintf(caption,192,L"BootHush \u2014 Macintosh 128K | %ls (%ls, %u%%); F9 slower / F10 faster; F12 stops",
+            relative.captured?L"Relative input ON":L"Click for relative input",
+            relative.unconfined?L"unconfined":L"confined",relative.gain_percent);
+        SetWindowTextW(hwnd,caption);
+    }
+    void adjust_relative_gain(bool faster)
+    {
+        const unsigned next=faster?std::min(800u,relative.gain_percent*2):std::max(25u,relative.gain_percent/2);
+        if(next==relative.gain_percent)return;
+        relative.gain_percent=next;++relative.gain_changes;
+        remainder_x=remainder_y=0;
+        relative_title();
     }
     bool relative_failure(const char *operation,DWORD code)
     {
@@ -182,10 +190,15 @@ struct mac_live_window {
     {
         if(!relative.captured || !accepts_input())return;
         RECT client{};if(!GetClientRect(hwnd,&client)){relative_failure("GetClientRect",GetLastError());return;}
-        const int scale=viewport(client).scale;
-        const int64_t x=remainder_x+dx,y=remainder_y+dy;
-        remainder_x=x%scale;remainder_y=y%scale;++relative.packets;
-        if(x/scale || y/scale)enqueue({static_cast<int32_t>(x/scale),static_cast<int32_t>(y/scale),false,pressed});
+        const int denominator=100*viewport(client).scale;
+        const int64_t x=remainder_x+int64_t(dx)*relative.gain_percent,y=remainder_y+int64_t(dy)*relative.gain_percent;
+        const int64_t gx=x/denominator,gy=y/denominator;
+        ++relative.packets;
+        if(gx<INT32_MIN || gx>INT32_MAX || gy<INT32_MIN || gy>INT32_MAX) {
+            relative_failure("relative motion exceeds signed 32-bit range",0);return;
+        }
+        remainder_x=x%denominator;remainder_y=y%denominator;
+        if(gx || gy)enqueue({static_cast<int32_t>(gx),static_cast<int32_t>(gy),false,pressed});
     }
 
     void enqueue_key(bh_live_key key)
@@ -372,6 +385,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         break;
     case WM_KEYDOWN:
     case WM_KEYUP:
+        if(window->relative.enabled && (wparam==VK_F9 || wparam==VK_F10)) {
+            if(message==WM_KEYDOWN && !(lparam&(1L<<30)) && window->accepts_input())
+                window->adjust_relative_gain(wparam==VK_F10);
+            return 0;
+        }
         if(window->relative.enabled && wparam==VK_F12) {
             if(message==WM_KEYDOWN && !(lparam&(1L<<30))) {
                 if(window->relative.captured){window->abandon_input(true);window->release_keys();}
@@ -631,6 +649,13 @@ mac_live_status mac_live_window_pump(mac_live_window *window)
 bool mac_live_window_relative_mode(mac_live_window *window,bool enabled)
 {
     return mac_live_window_relative_options(window,enabled,true);
+}
+
+bool mac_live_window_relative_gain(mac_live_window *window,unsigned percent)
+{
+    if(!window || window->is_pc || !window->hwnd || window->relative.enabled || percent<25 || percent>800)return false;
+    window->relative.initial_gain_percent=window->relative.gain_percent=percent;
+    return true;
 }
 
 bool mac_live_window_relative_options(mac_live_window *window,bool enabled,bool confine)
