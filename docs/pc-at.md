@@ -82,6 +82,14 @@ independently. A later error does not roll back earlier successful writes; a
 requested `--disk-out` snapshot is saved when the overall run is successful,
 including when an expected failure POST satisfies the stop condition.
 
+`--fail-hard-disk-write-at C:H:S:N` uses the same checks and starting CHS,
+but rejects only the positive, one-based Nth valid matching write. Its JSON
+adds `occurrence` and `matched`; a rejected transfer changes no bytes. Invalid
+geometry or a buffer crossing a 64 KiB boundary is rejected before matching.
+Disk reset does not rearm the selection. Choose either this option or the
+persistent write option. The feature is a synthetic firmware-model fault,
+not a claim about partial physical writes, power loss, or real BIOS behavior.
+
 The machine has RAM at `00000h`–`9ffffh`, EGA aperture in `a0000h`–`bffffh`, optional EGA ROM at `c0000h`, system ROM at `f0000h` and the reset ROM alias at `ff0000h` in the 24-bit space. `--scancode CYCLE:BYTE` schedules raw keyboard set-2 bytes at guest CPU boundaries, including `f0` followed by the key byte for release; it does not touch the host keyboard. The built-in keyboard shim handles a limited set of translated keys, not an entire BIOS keyboard implementation. See [EGA diagnostics](ega.md) for graphics and caller-supplied text-font limitations.
 
 When at least one scancode is scheduled, the result JSON includes

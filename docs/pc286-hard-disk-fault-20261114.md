@@ -117,6 +117,24 @@ The port's native-jab title test also passed on this emulator, with its own
 inputs and results in `C:/Repos/.task-temp/nstb-ordinal-regression-20261115-a/report.json`.
 These are model observations, not physical media or game validation.
 
+The opt-in `--fail-hard-disk-write-at C:H:S:N` now fails precisely one
+valid matching write. An original device test writes one value, injects a
+no-transfer second write, reads back the first value, writes a third value,
+and verifies it both in RAM and the output snapshot. It also covers an
+unreached occurrence, a different CHS, an invalid crossing buffer before a
+valid match, malformed and duplicate options, and preservation of the input
+image. The full 28-test PC suite passed; its log and reproducible active
+Mac/286/NES build inputs are in
+`C:/Repos/.task-temp/boothush-write-ordinal-active-20261115-a`. The twin
+executable SHA-256 is
+`3faa76ecc77c2e8d5010e1267ee76755e577ac1252a7127619d93683c432b924`.
+ClasSICK used this synthetic fault to test bounded writes to disposable
+images; its exact commands and scope are in
+`C:/Repos/ClasSICK-0.97/docs/development/mac-pc286-shared-parity-20261114.md`.
+The Not Super Tilt Bro mouse-title and side-tilt test also passed on that
+build; see `C:/Repos/Not-Super-Tilt-Bro/docs/side-tilt-evidence.md`.
+These observations do not prove real-media write atomicity or hardware input.
+
 ClasSICK also used bounded physical-memory inspection with an instrumented
 diagnostic loader to observe its 286 guest's stack watermark at eight window
 checkpoints. The linked evidence above records the separate known-depth

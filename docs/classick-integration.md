@@ -111,6 +111,11 @@ modeled fault, not a physical or production-loader qualification.
 The matching `--fail-hard-disk-write` option tests write refusal; the
 generated-disk copy experiment distinguishes a failed write from a failed
 read after a completed write, which does not roll back the disk.
+`--fail-hard-disk-write-at C:H:S:N` selects one valid write occurrence for
+transient-failure experiments. The independent device tests and the
+ClasSICK disposable-copy retry experiment are linked from
+[hard-disk fault evidence](pc286-hard-disk-fault-20261114.md); neither
+qualifies a physical installer or guarantees real disk-write atomicity.
 The `--fail-hard-disk-read-once` variant injects one matching failure so an
 original guest can exercise a subsequent reset and retry; see the [PC/AT
 guide](pc-at.md). It models no physical media recovery behavior.

@@ -118,6 +118,7 @@ struct request {
     uint32_t fail_hard_disk_read_at;
     uint32_t fail_hard_disk_read[3];
     bool fail_hard_disk_write_set;
+    uint32_t fail_hard_disk_write_at;
     uint32_t fail_hard_disk_write[3];
     struct inspection inspect[MAX_INSPECT_RANGES];
     size_t inspect_count;
@@ -215,6 +216,8 @@ struct machine_state {
     uint8_t hard_read_failure_head, hard_read_failure_sector;
     uint64_t hard_read_failures;
     bool hard_write_failure_enabled;
+    uint32_t hard_write_failure_at;
+    uint64_t hard_write_matches;
     uint16_t hard_write_failure_cylinder;
     uint8_t hard_write_failure_head, hard_write_failure_sector;
     uint64_t hard_write_failures;
@@ -457,6 +460,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->fail_hard_disk_read_set = true;
             request->fail_hard_disk_read_once = wcscmp(option, L"--fail-hard-disk-read-once") == 0;
             memcpy(request->fail_hard_disk_read, fields, sizeof(request->fail_hard_disk_read));
+        } else if (wcscmp(option, L"--fail-hard-disk-write-at") == 0 && !request->fail_hard_disk_write_set) {
+            if (!parse_fields(value, fields, 4) || fields[0] >= 615 || fields[1] >= 4 || fields[2] < 1 || fields[2] > 17 || !fields[3])
+                return "fail-hard-disk-write-at requires cylinder:head:sector:positive-occurrence";
+            request->fail_hard_disk_write_set = true;
+            request->fail_hard_disk_write_at = fields[3];
+            memcpy(request->fail_hard_disk_write, fields, sizeof(request->fail_hard_disk_write));
         } else if (wcscmp(option, L"--fail-hard-disk-write") == 0 && !request->fail_hard_disk_write_set) {
             if (!parse_fields(value, fields, 3) || fields[0] >= 615 || fields[1] >= 4 || fields[2] < 1 || fields[2] > 17)
                 return "fail-hard-disk-write requires cylinder:head:sector within 615:4:17 geometry";
@@ -1194,6 +1203,7 @@ static struct machine_state get_state(const struct machine *machine)
         .hard_read_failure_sector = state.hard_read_failure_sector,
         .hard_read_failures = state.hard_read_failures,
         .hard_write_failure_enabled = state.hard_write_failure_enabled,
+        .hard_write_failure_at = state.hard_write_failure_at, .hard_write_matches = state.hard_write_matches,
         .hard_write_failure_cylinder = state.hard_write_failure_cylinder,
         .hard_write_failure_head = state.hard_write_failure_head,
         .hard_write_failure_sector = state.hard_write_failure_sector,
@@ -1250,9 +1260,12 @@ static void print_result(const char *status, enum machine_kind machine,
             printf("}");
         }
         if (state.hard_write_failure_enabled) {
-            printf(",\"hard_disk_write_failure\":{\"cylinder\":%u,\"head\":%u,\"sector\":%u,\"injected\":%" PRIu64 ",\"bios_status\":32}",
+            printf(",\"hard_disk_write_failure\":{\"cylinder\":%u,\"head\":%u,\"sector\":%u,\"injected\":%" PRIu64 ",\"bios_status\":32",
                    state.hard_write_failure_cylinder, state.hard_write_failure_head,
                    state.hard_write_failure_sector, state.hard_write_failures);
+            if (state.hard_write_failure_at) printf(",\"occurrence\":%" PRIu32 ",\"matched\":%" PRIu64,
+                                                    state.hard_write_failure_at, state.hard_write_matches);
+            printf("}");
         }
     }
     if (error != NULL) {
@@ -2227,6 +2240,7 @@ int wmain(int argc, wchar_t **argv)
              "         --fail-hard-disk-read-once CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read-at CYLINDER:HEAD:SECTOR:OCCURRENCE (built-in firmware)\n"
              "         --fail-hard-disk-write CYLINDER:HEAD:SECTOR (built-in firmware)\n"
+             "         --fail-hard-disk-write-at CYLINDER:HEAD:SECTOR:OCCURRENCE (built-in firmware)\n"
              "PC trace: --pc-witness PATH --pc-witness-memory ADDRESS:LENGTH\n"
              "  --pc-witness-io PORT:LENGTH --pc-witness-cycles FIRST:LAST\n"
              "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events,\n"
@@ -2254,9 +2268,12 @@ int wmain(int argc, wchar_t **argv)
             : pc286_fail_hard_disk_read(machine.pc, request.fail_hard_disk_read[0], request.fail_hard_disk_read[1], request.fail_hard_disk_read[2]);
         if (!configured) error = "cannot configure hard disk read failure";
     }
-    if (error == NULL && request.fail_hard_disk_write_set &&
-        !pc286_fail_hard_disk_write(machine.pc, request.fail_hard_disk_write[0], request.fail_hard_disk_write[1], request.fail_hard_disk_write[2]))
-        error = "cannot configure hard disk write failure";
+    if (error == NULL && request.fail_hard_disk_write_set) {
+        bool configured = request.fail_hard_disk_write_at
+            ? pc286_fail_hard_disk_write_at(machine.pc, request.fail_hard_disk_write[0], request.fail_hard_disk_write[1], request.fail_hard_disk_write[2], request.fail_hard_disk_write_at)
+            : pc286_fail_hard_disk_write(machine.pc, request.fail_hard_disk_write[0], request.fail_hard_disk_write[1], request.fail_hard_disk_write[2]);
+        if (!configured) error = "cannot configure hard disk write failure";
+    }
     if (error == NULL && request.mouse_witness_path != NULL &&
         !mac128k_start_mouse_witness(machine.mac, request.mouse_witness_first, request.mouse_witness_last)) {
         error = "cannot initialize the mouse device witness";

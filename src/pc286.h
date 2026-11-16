@@ -59,6 +59,8 @@ typedef struct {
     uint8_t hard_read_failure_head, hard_read_failure_sector;
     uint64_t hard_read_failures;
     bool hard_write_failure_enabled;
+    uint32_t hard_write_failure_at;
+    uint64_t hard_write_matches;
     uint16_t hard_write_failure_cylinder;
     uint8_t hard_write_failure_head, hard_write_failure_sector;
     uint64_t hard_write_failures;
@@ -82,6 +84,8 @@ bool pc286_fail_hard_disk_read_once(pc286 *machine, unsigned cylinder, unsigned 
 bool pc286_fail_hard_disk_read_at(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector, uint32_t occurrence);
 /* Built-in firmware only: fail every valid hard-disk write beginning at CHS. */
 bool pc286_fail_hard_disk_write(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector);
+/* Fail exactly the positive one-based matching valid write occurrence. */
+bool pc286_fail_hard_disk_write_at(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector, uint32_t occurrence);
 const uint8_t *pc286_hard_disk(const pc286 *machine);
 bool pc286_inject_scancode(pc286 *machine, uint8_t scancode);
 void pc286_expect_input(pc286 *machine, bool pending);

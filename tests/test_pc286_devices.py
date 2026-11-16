@@ -247,6 +247,56 @@ class PcAtIntegrationTests(unittest.TestCase):
                          '--fail-hard-disk-read-once','0:0:2',exit_code=2)['status'],'error')
         self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
 
+    def test_hard_disk_write_failure_at_occurrence(self):
+        # Write distinct bytes, reject the second write without transfer, read
+        # the first bytes back, then permit a third write and read that back.
+        program=checked_program((
+            ('31c0 8ec0 c70600064141 bb0006 b80103 b90200 ba8000 cd13',0x72),
+            ('c70600064242 bb0006 b80103 b90200 ba8000 cd13',0x73),
+            ('80fc20',0x75),
+            ('bb0008 b80102 b90200 ba8000 cd13',0x72),
+            ('813e00084141',0x75),
+            ('c70600064343 bb0006 b80103 b90200 ba8000 cd13',0x72),
+            ('bb000a b80102 b90200 ba8000 cd13',0x72),
+            ('813e000a4343',0x75),
+        ),0x42)
+        disk=self.write('ordinal-write.img',boot_image(program,HARD_DISK_SIZE))
+        before=hashlib.sha256(disk.read_bytes()).hexdigest()
+        snapshot=self.directory/'ordinal-write-after.img'
+        result=self.run_guest('--hard-disk',disk,'--disk-out',snapshot,
+                              '--fail-hard-disk-write-at','0:0:2:2','--until-post','0x42',
+                              '--inspect','0x800:2','--inspect','0xa00:2')
+        self.assertEqual(result['status'],'condition_met')
+        self.assertEqual(result['hard_disk_write_failure'],
+                         {'cylinder':0,'head':0,'sector':2,'injected':1,'bios_status':32,
+                          'occurrence':2,'matched':3})
+        self.assertEqual([bytes.fromhex(r['bytes']) for r in result['memory_ranges']],[b'AA',b'CC'])
+        self.assertEqual(snapshot.read_bytes()[512:514],b'CC')
+        self.assertEqual(hashlib.sha256(disk.read_bytes()).hexdigest(),before)
+        no_trigger=checked_program((
+            ('31c0 8ec0 bb0006 b80103 b90200 ba8000 cd13',0x72),
+            ('bb0006 b80103 b90200 ba8000 cd13',0x72),
+        ),0x43)
+        other=self.write('ordinal-write-not-reached.img',boot_image(no_trigger,HARD_DISK_SIZE))
+        for selection,matched in (('0:0:2:3',2),('0:0:3:1',0)):
+            result=self.run_guest('--hard-disk',other,'--fail-hard-disk-write-at',selection,'--until-post','0x43')
+            self.assertEqual((result['hard_disk_write_failure']['matched'],result['hard_disk_write_failure']['injected']),(matched,0))
+        crossing=checked_program((
+            ('31c0 8ec0 bb00ff b80103 b90200 ba8000 cd13',0x73),
+            ('80fc09',0x75),
+            ('bb0006 b80103 b90200 ba8000 cd13',0x73),
+            ('80fc20',0x75),
+            ('bb0006 b80103 b90200 ba8000 cd13',0x72),
+        ),0x44)
+        crossing_disk=self.write('ordinal-write-crossing.img',boot_image(crossing,HARD_DISK_SIZE))
+        result=self.run_guest('--hard-disk',crossing_disk,'--fail-hard-disk-write-at','0:0:2:1','--until-post','0x44')
+        self.assertEqual((result['hard_disk_write_failure']['matched'],result['hard_disk_write_failure']['injected']),(2,1))
+        for bad in ('0:0:2:0','615:0:1:2','0:0:2','0:0:2:2:1'):
+            self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-write-at',bad,exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--hard-disk',disk,'--fail-hard-disk-write','0:0:2',
+                         '--fail-hard-disk-write-at','0:0:2:2',exit_code=2)['status'],'error')
+        self.assertEqual(self.run_guest('--fail-hard-disk-write-at','0:0:2:2',exit_code=2)['status'],'error')
+
     def test_selected_hard_disk_write_failure(self):
         program = bytearray.fromhex('31c0 8ec0 bb007d b80103 b90200 ba8000 cd13 72 00')
         branch = len(program)-1
