@@ -118,6 +118,11 @@ Use one stop condition at most. Numbers accept decimal or `0x` hex. The runner c
 
 The JSON includes `status`, `cycles`, and physical `pc`. Macintosh adds `vbl`. PC adds `cs`, `ip`, `halted`, and the last POST byte and exception vector when available. Optional `memory` contains the physical address and hexadecimal bytes. A bus fault reports its operation and address.
 
+Mac-only `--mac-cpu-state 1` adds stopped D0-D7, A0-A7, PC and SR values
+without stepping or reading the guest bus. A7 is the active stack pointer.
+The default result is unchanged. See [register observations](docs/mac-cpu-state.md)
+for the JSON layout, native call/interrupt checks and scope limits.
+
 PC runs with scheduled scancodes also report `pc_keyboard_input` counts for
 scheduled, accepted, rejected and pending bytes. Acceptance is into the model,
 not evidence of guest consumption. See the [PC/AT guide](docs/pc-at.md) for

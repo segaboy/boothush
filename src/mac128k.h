@@ -31,6 +31,14 @@ typedef struct {
     const char *fault_operation;
 } mac128k_state;
 
+/* Stopped instruction-boundary values, with A7 the currently active stack.
+   Observation only; no bus reads, stepping, or register modification. */
+typedef struct {
+    uint32_t d[8], a[8], pc;
+    uint16_t sr;
+} mac128k_cpu_state;
+bool mac128k_read_cpu_state(const mac128k *machine, mac128k_cpu_state *state);
+
 /* M0110 witness kinds 0-8 follow queue, reject, mode, SR write, command
    completion, reply start/completion, key delivery, SR read; 9 is input due. */
 typedef struct { uint64_t cycle,due; uint32_t pc; uint8_t kind,value,queue; } mac128k_keyboard_event;

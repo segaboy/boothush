@@ -746,6 +746,18 @@ mac128k_state mac128k_get_state(const mac128k *machine)
             machine->cpu.getPC(), machine->fault_address, machine->fault_operation};
 }
 
+bool mac128k_read_cpu_state(const mac128k *machine, mac128k_cpu_state *state)
+{
+    if (!machine || !state) return false;
+    for (int i = 0; i < 8; ++i) {
+        state->d[i] = machine->cpu.getD(i);
+        state->a[i] = machine->cpu.getA(i);
+    }
+    state->pc = machine->cpu.getPC();
+    state->sr = machine->cpu.getSR();
+    return true;
+}
+
 void mac128k_set_mouse_button(mac128k *machine, bool pressed)
 {
     if (machine->mouse_pressed == pressed) {

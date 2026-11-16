@@ -54,6 +54,14 @@ For keyboard timeout and malformed-byte paths, `--keyboard-fault` selects a sing
 
 ## Inspect several regions at one stop
 
+For native calling-convention checks, add `--mac-cpu-state 1` to a bounded Mac
+run stopped at an identified instruction boundary. The [register guide](mac-cpu-state.md)
+defines D/A array order, SR and active A7. ClasSICK now uses this to test its
+actual interrupt veneers and selected production interrupt spans; Not Super
+Tilt Bro uses it at native movement/jab call boundaries following mouse Start.
+These are separate software checks. They do not transfer game code to ClasSICK
+or prove physical timing, arbitrary paths or release qualification.
+
 Repeat `--inspect` for each physical range. Up to 16 ranges are allowed, with 4,096 bytes per range and 16,384 bytes total. Overlapping ranges are returned independently in request order. Reads use side-effect-free diagnostic access to Mac RAM or PC conventional RAM and its video aperture. A single range returns the established `memory` object. Multiple ranges return `memory_ranges`, whose entries each contain `address` and hexadecimal `bytes`.
 
 For a PC run with scheduled scancodes, `pc_keyboard_input` accounts for
