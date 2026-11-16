@@ -10,6 +10,11 @@ Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each 
 
 ## Current Mac/286 direction
 
+For ClasSICK's installer and boot-error screens, the original
+`scripts/make_diagnostic_font.py` helper supplies a reproducible font for
+`--ega-font`; see [EGA diagnostics](ega.md). Text captures otherwise remain
+black. Keep the generated font hash with the media and capture receipt.
+
 The owner's 2026-11-14 direction makes native Mac128K and PC/AT 286 the next paired-release targets; x64 work is paused. The [original EGA/keyboard diagnostic](pc286-pair-probe-20261114.md) checks a centered 512x342 canvas and two directional cursor moves with scheduled keys. It does not run ClasSICK or establish a window, parity, human input or physical-hardware behavior. See the [PC/AT profile](pc-at.md) for exact firmware and keyboard limitations.
 
 ClasSICK's separate four-track diagnostic loader test now exercises injected

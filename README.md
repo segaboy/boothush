@@ -1,5 +1,8 @@
 # BootHush
 
+The [EGA guide](docs/ega.md) includes an original diagnostic-font generator for
+readable 286 installer/error captures without a firmware font.
+
 BootHush is a headless development and testing platform for portable software and ports between different platforms. Its goal is to let developers build a repeatable test, run it against supported source and target environments, and compare behavior while they adapt the software. See the [project direction](docs/project-direction.md) for the intended workflow and current boundaries.
 
 ClasSICK is the immediate development priority and the project exercising BootHush today. The current implementation runs on Windows and provides Mac 128K and 286 machine profiles. Guest invocations load local images, run an isolated guest, return a JSON result, and exit. Runs are headless by default. The Mac profile also has an opt-in window for live mouse testing and recording.
