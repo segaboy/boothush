@@ -260,3 +260,21 @@ receipt owns exact identities and commands. This is a downstream tool result,
 not proof of hardware timing, emulator accuracy or release qualification.
 The port's polling title provides a separate IPL7 control in its
 `docs/mouse-title-evidence.md`; game-derived source was not transferred.
+
+## Original axis pacing regression - 2026-11-17
+
+Run `python -B -m unittest -v test_mac_mouse_timing` from `tests` with
+`BOOTHUSH_EXE` set to the tested executable. Its original, fixed-path IPL7
+polling ROM reads both SCC channels and VIA without acknowledging SCC. Two tests
+passed without skips (28 bounded, headless BootHush runs) using executable
+SHA-256 `9dc2f28425bafd10114cfde9ab5c439d61234873854cfa1c211cdcfb26bda82d`.
+The 2,048/4,096 edge and 0/4,096 guard matrix verifies queued overlapping vectors,
+VBL crossings, legal Gray transitions, decoded vector endpoints, unchanged
+traced/plain state and pixels, and exact recorded/replayed phase timestamps with
+complete witnesses. Negating while swapping axes preserves the physical phase
+trajectory because X/Y direction polarities differ. With inversion 3 and initial
+phase 2, +X starts 2->0->1 (DCD on its second edge), while +Y starts 2->3->1
+(DCD on its first edge); the separate four-direction check preserves that expected
+first-interrupt offset. This isolates bridge/scheduler pacing. It does not assert
+that a guest motion handler consumes every edge, qualify 2,048-cycle delivery for
+ClasSICK, reproduce host movement, or validate physical hardware timing.
