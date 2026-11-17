@@ -1,5 +1,9 @@
 # ClasSICK 0.97 headless integration
 
+For human sessions, the [local launch investigation](human-launch-20261117.md)
+records the interrupted M1R6 run and a wrapper that disables PowerShell
+telemetry and update checks before startup. Guest input qualification is separate.
+
 ClasSICK is BootHush's immediate integration priority. BootHush's broader goal is headless development and testing of portable software across platforms; see the [project direction](project-direction.md).
 
 BootHush is a Windows command-line test runner. The local checkout contains the current interface and tests. The usual built executable on this machine is `C:\Repos\boothush\out\windows\boothush.exe`. A checkout and an executable are separate artifacts. Check the source revision with `git -C C:\Repos\boothush rev-parse HEAD`, inspect the executable with `--help` and `--version`, and use `Get-FileHash` to identify its bytes. Rebuild it from the checkout when the source or build provenance is uncertain. Build instructions and the complete command reference are in the [README](../README.md).

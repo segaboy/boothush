@@ -193,6 +193,9 @@ launcher: `--pointer-log`) to retain raw, scaled guest and sampled host
 movement. See [pointer observation](docs/pointer-observation-20261117.md)
 for the bounded format and its timing/coalescing limits.
 
+The [human launch guide](docs/human-launch-20261117.md) includes a local wrapper
+that disables PowerShell telemetry and update checks before process startup.
+
 ## Third-party code
 
 [Moira](third_party/moira/UPSTREAM.md) provides the 68000 core under MIT. [MAME’s i286/i86 core](third_party/mame-i286/README.md) provides the 80286 CPU under BSD-3-Clause. Those directories retain the upstream notices and revision records. The [Macintosh floppy](docs/mac-floppy.md), [keyboard](docs/mac-keyboard.md) and [RTC](docs/mac-rtc.md) notes document their respective device references. BootHush source and test fixtures are kept separate from the ClasSICK OS and ROM repositories.

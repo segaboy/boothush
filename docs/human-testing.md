@@ -84,6 +84,24 @@ The shown Mac settings are for the buffered ClasSICK candidate; choose the setti
 
 Append `--prepare-only` to write `plan.json` and `launch.ps1` without launching. Run `& C:\path\plan\launch.ps1` when ready. It verifies the reviewed image, executable, Python and launcher hashes and creates a new `session` subdirectory. Existing destinations are rejected; prepare another directory to repeat. Preparing or launching a session is not a pass result.
 
+For a local session launched through PowerShell 7, use the companion wrapper
+from Command Prompt (substitute the installed PowerShell executable and prepared
+plan paths):
+
+```bat
+scripts\Invoke-LocalHumanSession.cmd "C:\path\pwsh.exe" "C:\path\plan\launch.ps1"
+```
+
+It sets `POWERSHELL_TELEMETRY_OPTOUT=1` and `POWERSHELL_UPDATECHECK=Off`
+before starting PowerShell with `-NoProfile`. These settings affect only that
+process tree; the existing plan's input-hash checks and execution limit remain.
+The wrapper returns the session's exit code. Setting these variables inside
+an already running PowerShell does not prevent its startup telemetry. Automation
+hosts must also opt out their outer PowerShell before starting it, or launch
+the wrapper from a host without PowerShell startup telemetry. This addresses
+PowerShell's documented telemetry and update behavior, not all network activity
+on the workstation. See the [launch investigation](human-launch-20261117.md).
+
 Every completed launcher run retains the emulator command, input hashes, JSON stdout, stderr, final PBM/PPM, accepted-key log, and `session.json`. Mac additionally records `mouse.bhmouse`. Optional video records the first requested guest seconds at 5 fps, bounded independently of the session. With an explicit FFmpeg path, the helper converts the final frame to PNG and video to MP4 and retains conversion commands/results. Y4M is large (about 3.36 MB/second for PC at 5 fps); recording is off by default. Capture timing is guest time, not necessarily wall time. The [capture guide](headless-capture.md) defines those limits.
 
 Fill in `observations.md` after testing: tester/date, actual actions, expected and observed results, focus/release/exit behavior, capture references, defects, and disposition. `human_verified` remains false in machine-generated reports because Windows messages can be synthetic. A tester's completed record supplies the separate human evidence. Screenshots alone do not establish input reliability, physical-hardware fidelity, or release qualification.
