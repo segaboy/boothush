@@ -15,7 +15,7 @@ class HumanPlanTests(BootHushTestCase):
     def test_unconfined_mode_is_explicit_and_mutually_exclusive(self):
         out = self.scratch / 'free-plan'
         cmd = [sys.executable, '-B', str(SCRIPT), '--emulator', str(self.exe), '--machine', 'mac128k',
-               '--rom', str(self.rom), '--output', str(out), '--prepare-only', '--unconfined-mouse', '--mouse-gain-percent','400']
+               '--rom', str(self.rom), '--output', str(out), '--prepare-only', '--unconfined-mouse', '--mouse-gain-percent','400','--pointer-log']
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 0, r.stderr)
         plan = json.loads((out/'plan.json').read_text())
@@ -24,6 +24,8 @@ class HumanPlanTests(BootHushTestCase):
         self.assertEqual(plan['command'][plan['command'].index('--live-mouse-gain')+1], '400')
         self.assertIn('--unconfined-mouse', (out/'launch.ps1').read_text())
         self.assertIn('--mouse-gain-percent', (out/'launch.ps1').read_text())
+        self.assertIn('--pointer-log', (out/'launch.ps1').read_text())
+        self.assertIn('--live-pointer-log',plan['command'])
         for extra in (['--capture-mouse'], ['--machine','pc286'], ['--mouse-gain-percent','24'], ['--mouse-gain-percent','801']):
             r = subprocess.run(cmd+extra, capture_output=True, text=True, timeout=10)
             self.assertEqual(r.returncode, 2, r.stderr)

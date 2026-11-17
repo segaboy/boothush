@@ -188,6 +188,11 @@ To see which signals the guest observed, replay the same input with a device tra
 
 `BHMACMOUSE1 FIRST LAST STOP COUNT DROPPED` gives the requested range, actual stop, number of rows saved, and number dropped after the 65,536-row limit. The next line labels the columns. Rows show pin or button changes, SCC control accesses, mouse and interrupt-related VIA accesses, and CPU interrupt-level changes. `snapshot` records the initial state when the guest reaches the range. `scc_latched` and `scc_dcd` use bit 0 for X and bit 1 for Y, and `scc_pending` uses the SCC RR3 encoding. `address`, `reg`, and `value` describe the bus access on SCC/VIA rows. Device state is sampled after the event. Cycle labels use the emulator's instruction timing, with file order preserving event order within a cycle. The trace has no guest-visible side effects.
 
+Live Mac mouse investigations can use `--live-pointer-log NEW_PATH` (human
+launcher: `--pointer-log`) to retain raw, scaled guest and sampled host
+movement. See [pointer observation](docs/pointer-observation-20261117.md)
+for the bounded format and its timing/coalescing limits.
+
 ## Third-party code
 
 [Moira](third_party/moira/UPSTREAM.md) provides the 68000 core under MIT. [MAME’s i286/i86 core](third_party/mame-i286/README.md) provides the 80286 CPU under BSD-3-Clause. Those directories retain the upstream notices and revision records. The [Macintosh floppy](docs/mac-floppy.md), [keyboard](docs/mac-keyboard.md) and [RTC](docs/mac-rtc.md) notes document their respective device references. BootHush source and test fixtures are kept separate from the ClasSICK OS and ROM repositories.

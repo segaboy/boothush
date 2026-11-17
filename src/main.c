@@ -94,6 +94,7 @@ struct request {
     const wchar_t *cancel_event;
     const wchar_t *mouse_record_path;
     const wchar_t *live_key_log_path;
+    const wchar_t *live_pointer_log_path;
     const wchar_t *mouse_replay_path;
     const wchar_t *mouse_witness_path;
     const wchar_t *keyboard_witness_path;
@@ -536,6 +537,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->mouse_record_path = value;
         } else if (wcscmp(option, L"--live-key-log") == 0 && request->live_key_log_path == NULL) {
             request->live_key_log_path = value;
+        } else if (wcscmp(option, L"--live-pointer-log") == 0 && request->live_pointer_log_path == NULL) {
+            request->live_pointer_log_path = value;
         } else if (wcscmp(option, L"--mouse-replay") == 0 && request->mouse_replay_path == NULL) {
             request->mouse_replay_path = value;
         } else if (wcscmp(option, L"--mouse-witness") == 0 && request->mouse_witness_path == NULL) {
@@ -730,6 +733,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         return "input events must precede the cycle limit";
     }
     if(request->live_key_log_path && !request->live_scale)return "live-key-log requires live input";
+    if(request->live_pointer_log_path && (!request->live_scale || !request->live_mouse_relative))return "live-pointer-log requires live relative mouse input";
     if(request->live_mouse_set && (!request->live_scale || request->machine!=MACHINE_MAC128K))return "live-mouse requires live mac128k";
     if(request->live_mouse_gain && !request->live_mouse_relative)return "live-mouse-gain requires relative or relative-free mouse mode";
     const bool mouse_bridge = (request->live_scale && request->machine==MACHINE_MAC128K) || request->relative_motion || request->mouse_replay_path || request->window_input;
@@ -1172,6 +1176,7 @@ static const char *open_mouse_session(struct mouse_session *mouse, const struct 
         if(request->live_mouse_relative &&
            (!mac_live_window_relative_gain(mouse->window,request->live_mouse_gain?request->live_mouse_gain:100) ||
             !mac_live_window_relative_options(mouse->window,true,!request->live_mouse_unconfined)))return "cannot enable relative mouse capture";
+        if(request->live_pointer_log_path && !mac_live_window_enable_pointer_log(mouse->window))return "cannot allocate live pointer log";
     }
     if (request->window_input) {
         mouse->injected_window = true;
@@ -1548,6 +1553,24 @@ static bool write_live_keys(const struct request *request,const struct mouse_ses
                               k.code,k.pressed,k.extended,k.repeated,k.focus_release);
     }
     const bool ok=used<capacity && write_new_file(request->live_key_log_path,NULL,0,(const uint8_t*)text,(DWORD)used);
+    free(text);return ok;
+}
+
+static bool write_live_pointer(const struct request *request,const struct mouse_session *mouse)
+{
+    uint32_t count=0;uint64_t dropped=0;
+    const mac_live_pointer_sample *rows=mac_live_window_pointer_log(mouse->window,&count,&dropped);
+    if(!rows)return false;
+    const size_t capacity=256+(size_t)count*192;
+    char *text=malloc(capacity);if(!text)return false;
+    size_t used=(size_t)snprintf(text,capacity,"BHLIVEPOINTER1 %u %" PRIu64 "\nelapsed_ms capture raw_dx raw_dy guest_dx guest_dy host_dx host_dy host_valid scale gain_percent\n",count,dropped);
+    for(uint32_t i=0;i<count;i++) {
+        const mac_live_pointer_sample *s=&rows[i];
+        int n=snprintf(text+used,capacity-used,"%" PRIu64 " %u %" PRId32 " %" PRId32 " %" PRId32 " %" PRId32 " %" PRId32 " %" PRId32 " %u %u %u\n",
+            s->elapsed_ms,s->capture,s->raw_dx,s->raw_dy,s->guest_dx,s->guest_dy,s->host_dx,s->host_dy,s->host_valid,s->scale,s->gain_percent);
+        if(n<0 || (size_t)n>=capacity-used){free(text);return false;}used+=(size_t)n;
+    }
+    const bool ok=write_new_file(request->live_pointer_log_path,NULL,0,(const uint8_t*)text,(DWORD)used);
     free(text);return ok;
 }
 
@@ -2381,6 +2404,7 @@ int wmain(int argc, wchar_t **argv)
              "Mac capture: --live-mouse relative (confined), relative-free (visible/free host pointer), or window (default)\n"
              "             Click starts relative input; F12 stops it\n"
              "             --live-mouse-gain 25..800 percent (default 100); F9 halves / F10 doubles\n"
+             "             --live-pointer-log NEW_PATH records raw, guest and sampled host deltas\n"
              "PC input: --scancode CYCLE:BYTE; --ega-font PATH (256 8x14 glyphs)\n"
              "PC test: --fail-floppy-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
              "         --fail-hard-disk-read CYLINDER:HEAD:SECTOR (built-in firmware)\n"
@@ -2505,6 +2529,8 @@ int wmain(int argc, wchar_t **argv)
     if (video != NULL && !video_finish(video, video->failed))
         result = (struct run_result){"error", "cannot close requested video", 2};
     if (mouse.window != NULL) {
+        if(request.live_pointer_log_path && !write_live_pointer(&request,&mouse))
+            result=(struct run_result){"error","cannot create or write live pointer log",2};
         mouse.pointer_state=mac_live_window_pointer_state(mouse.window);
         mouse.pending_keys=bh_live_window_pending_keys(mouse.window)+(mouse.key_pending?1:0);
         mouse.focus_losses=bh_live_window_focus_losses(mouse.window);

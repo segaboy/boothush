@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cwchar>
 #include <new>
+#include <memory>
 
 namespace {
 
@@ -92,6 +93,12 @@ struct mac_live_window {
     bool pressed = false;
     int guest_x = 0;
     int guest_y = 0;
+    static constexpr uint32_t pointer_log_capacity = 65536;
+    std::unique_ptr<mac_live_pointer_sample[]> pointer_log;
+    uint32_t pointer_log_count = 0;
+    uint64_t pointer_log_dropped = 0, pointer_log_start = 0;
+    POINT host_previous{};
+    bool host_anchored = false;
 
     void enqueue(mac_live_event event)
     {
@@ -151,6 +158,7 @@ struct mac_live_window {
     {
         if(!relative.captured)return;
         relative.captured=false;++relative.releases;
+        host_anchored=false;
         remainder_x=remainder_y=0;capture_click_up=false;
         if(visible) {
             RAWINPUTDEVICE device{1,2,RIDEV_REMOVE,nullptr};
@@ -184,6 +192,7 @@ struct mac_live_window {
             if(!relative.unconfined)SetCursor(nullptr);
         }
         remainder_x=remainder_y=0;relative.captured=true;++relative.captures;
+        host_anchored=pointer_log && visible && GetCursorPos(&host_previous);
         anchored=false;relative_title();return true;
     }
     void relative_motion(int32_t dx,int32_t dy)
@@ -198,6 +207,23 @@ struct mac_live_window {
             relative_failure("relative motion exceeds signed 32-bit range",0);return;
         }
         remainder_x=x%denominator;remainder_y=y%denominator;
+        if(pointer_log) {
+            mac_live_pointer_sample sample{};
+            sample.elapsed_ms=GetTickCount64()-pointer_log_start;
+            sample.capture=relative.captures;sample.scale=denominator/100;
+            sample.gain_percent=relative.gain_percent;
+            sample.raw_dx=dx;sample.raw_dy=dy;
+            sample.guest_dx=static_cast<int32_t>(gx);sample.guest_dy=static_cast<int32_t>(gy);
+            POINT now{};
+            if(visible && GetCursorPos(&now)) {
+                const int64_t hx=int64_t(now.x)-host_previous.x,hy=int64_t(now.y)-host_previous.y;
+                sample.host_valid=host_anchored && hx>=INT32_MIN && hx<=INT32_MAX && hy>=INT32_MIN && hy<=INT32_MAX;
+                if(sample.host_valid){sample.host_dx=static_cast<int32_t>(hx);sample.host_dy=static_cast<int32_t>(hy);}
+                host_previous=now;host_anchored=true;
+            }else host_anchored=false;
+            if(pointer_log_count<pointer_log_capacity)pointer_log[pointer_log_count++]=sample;
+            else if(pointer_log_dropped!=UINT64_MAX)++pointer_log_dropped;
+        }
         if(gx || gy)enqueue({static_cast<int32_t>(gx),static_cast<int32_t>(gy),false,pressed});
     }
 
@@ -669,6 +695,21 @@ bool mac_live_window_relative_options(mac_live_window *window,bool enabled,bool 
 mac_live_pointer_state mac_live_window_pointer_state(const mac_live_window *window)
 {
     return window?window->relative:mac_live_pointer_state{};
+}
+
+bool mac_live_window_enable_pointer_log(mac_live_window *window)
+{
+    if(!window || window->is_pc || window->relative.captured || window->pointer_log)return false;
+    window->pointer_log.reset(new(std::nothrow) mac_live_pointer_sample[mac_live_window::pointer_log_capacity]);
+    window->pointer_log_start=GetTickCount64();
+    return window->pointer_log!=nullptr;
+}
+
+const mac_live_pointer_sample *mac_live_window_pointer_log(const mac_live_window *window,
+    uint32_t *count,uint64_t *dropped)
+{
+    *count=window?window->pointer_log_count:0;*dropped=window?window->pointer_log_dropped:0;
+    return window?window->pointer_log.get():nullptr;
 }
 
 bool mac_live_window_inject_relative(mac_live_window *window,int32_t dx,int32_t dy)

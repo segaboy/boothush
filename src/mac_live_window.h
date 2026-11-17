@@ -35,6 +35,19 @@ typedef struct {
     uint32_t win32_error;
 } mac_live_pointer_state;
 
+typedef struct {
+    uint64_t elapsed_ms;
+    int32_t raw_dx, raw_dy, guest_dx, guest_dy, host_dx, host_dy;
+    uint32_t capture, scale, gain_percent;
+    bool host_valid;
+} mac_live_pointer_sample;
+
+/* Optional bounded diagnostic. Host deltas are sampled desktop-pointer
+ * displacement, not per-packet accelerated counts or absolute positions. */
+bool mac_live_window_enable_pointer_log(mac_live_window *window);
+const mac_live_pointer_sample *mac_live_window_pointer_log(const mac_live_window *window,
+    uint32_t *count, uint64_t *dropped);
+
 /* Optional foreground relative mouse capture. F12 releases; click recaptures. */
 bool mac_live_window_relative_mode(mac_live_window *window,bool enabled);
 /* Explicit unconfined mode keeps the host pointer visible and never clips it. */

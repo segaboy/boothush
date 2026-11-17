@@ -17,11 +17,11 @@ class LiveKeyTests(BootHushTestCase):
                 self.check_relative_replay(mode,gain)
 
     def check_relative_replay(self,mode,gain):
-        stem=mode+str(gain);trace=self.scratch/(stem+'.bhmouse');frame=self.scratch/(stem+'.pbm')
+        stem=mode+str(gain);trace=self.scratch/(stem+'.bhmouse');frame=self.scratch/(stem+'.pbm');pointer=self.scratch/(stem+'.pointer')
         env=os.environ.copy();env['BOOTHUSH_TEST_RELATIVE']='1'
         cmd=[env['BOOTHUSH_LIVE_KEY_TEST_EXE'],'--machine','mac128k','--rom',str(self.rom),
              '--live','1','--live-mouse',mode,'--mouse-record',str(trace),'--frame',str(frame),
-             '--live-mouse-gain',str(gain),'--cycles','20000000','--timeout-ms','5000','--inspect','0xb00:4']
+             '--live-mouse-gain',str(gain),'--live-pointer-log',str(pointer),'--cycles','20000000','--timeout-ms','5000','--inspect','0xb00:4']
         r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         self.assertEqual(r.returncode,0,(r.stdout,r.stderr));data=json.loads(r.stdout)
         self.assertEqual(data['relative_mouse'],{'packets':1,'captures':1,'releases':1,'captured_at_stop':False})
@@ -29,6 +29,17 @@ class LiveKeyTests(BootHushTestCase):
         self.assertEqual(data['relative_mouse_gain'],{'initial_percent':gain,'final_percent':gain,'changes':0})
         self.assertEqual(data['mouse'],{'samples':1,'steps':128*gain//100,'pending':0})
         self.assertEqual(list(map(int,trace.read_text().splitlines()[1].split()))[1:],[64*gain//100,0,0])
+        lines=pointer.read_text().splitlines()
+        self.assertEqual(lines[0],'BHLIVEPOINTER1 1 0')
+        row=list(map(int,lines[2].split()))
+        self.assertEqual(row[1:],[1,64,0,64*gain//100,0,0,0,0,1,gain])
+        original=pointer.read_bytes()
+        retry=[x for x in cmd]
+        for option in ('--mouse-record','--frame'):
+            i=retry.index(option);del retry[i:i+2]
+        again=subprocess.run(retry,env=env,capture_output=True,text=True,timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(again.returncode,2)
+        self.assertEqual(pointer.read_bytes(),original)
         replay_frame=self.scratch/(stem+'-replay.pbm')
         replay=self.boot('--mouse-replay',trace,'--frame',replay_frame,'--inspect','0xb00:4',cycles=20000000,timeout_ms=5000)
         self.assertEqual(replay['memory'],data['memory']);self.assertEqual(frame.read_bytes(),replay_frame.read_bytes())

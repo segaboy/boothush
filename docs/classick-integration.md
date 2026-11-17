@@ -178,6 +178,11 @@ boundaries are recorded there; it is not a distribution-qualified build.
 
 ## Display and remaining limits
 
+The opt-in [live pointer observation log](pointer-observation-20261117.md)
+separates raw device counts, display-scaled guest vectors and sampled host
+movement. M1R5 exposed guest omissions at edge 2048 and an unresolved human
+response complaint; prior scheduled-input passes do not close those issues.
+
 Mac and 286 callers can combine `--until-pc ADDRESS --until-pc-after CYCLE`
 to inspect a later visit to a known instruction. This supports register/stack
 checks after a startup or interaction sequence without modifying guest code.

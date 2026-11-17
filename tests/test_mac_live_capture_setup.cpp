@@ -12,6 +12,9 @@ namespace fixture {
 int fail=0,clips=0,clip_reads=0,maps=0,registrations=0,removals=0,hides=0;
 RECT clip{0,0,1920,1080};
 LONG_PTR window=0;
+POINT pointer{100,100};bool pointer_ok=true;ULONGLONG tick=1000;
+BOOL WINAPI get_pointer(LPPOINT p){if(!pointer_ok)return FALSE;*p=pointer;return TRUE;}
+ULONGLONG WINAPI clock(){return tick;}
 bool denied(int operation){if(fail!=operation)return false;SetLastError(ERROR_ACCESS_DENIED);return true;}
 BOOL WINAPI client(HWND,LPRECT r){if(denied(1))return FALSE;*r={0,0,1024,684};return TRUE;}
 BOOL WINAPI get_clip(LPRECT r){++clip_reads;if(denied(2))return FALSE;*r=clip;return TRUE;}
@@ -35,6 +38,8 @@ void reset(){fail=clips=clip_reads=maps=registrations=removals=hides=0;clip={0,0
 #define ClipCursor fixture::set_clip
 #define SetWindowTextW fixture::title
 #define SetCursor fixture::cursor
+#define GetCursorPos fixture::get_pointer
+#define GetTickCount64 fixture::clock
 #undef GetWindowLongPtrW
 #define GetWindowLongPtrW fixture::user_data
 #include "../src/mac_live_window.cpp"
@@ -71,6 +76,31 @@ int main()
         window_proc(free.hwnd,WM_KEYDOWN,VK_F10,1);
         check(free.relative.gain_percent==100,"inactive shortcut changed gain");
         check(!free.input_error && !free.relative.captured && fixture::registrations==0,"inactive input treated as capture failure");
+        fixture::reset();free.active=true;
+        check(mac_live_window_enable_pointer_log(&free),"log allocation");
+        check(!mac_live_window_enable_pointer_log(&free),"duplicate log allocation");
+        check(free.begin_relative(),"logged capture");
+        fixture::pointer={112,94};fixture::tick=1005;
+        free.relative_motion(4,-2);
+        uint32_t count;uint64_t dropped;
+        auto rows=mac_live_window_pointer_log(&free,&count,&dropped);
+        check(count==1 && !dropped && rows[0].elapsed_ms==5 && rows[0].capture==2,"log header/time/capture");
+        check(rows[0].raw_dx==4 && rows[0].raw_dy==-2 && rows[0].guest_dx==2 && rows[0].guest_dy==-1,"raw/scaled accounting");
+        check(rows[0].host_valid && rows[0].host_dx==12 && rows[0].host_dy==-6 && rows[0].scale==2,"host observation");
+        fixture::pointer_ok=false;free.relative_motion(0,0);
+        check(!rows[1].host_valid,"unavailable host pointer treated as valid");
+        fixture::pointer_ok=true;fixture::pointer={900,900};free.relative_motion(0,0);
+        check(!rows[2].host_valid,"missing interval fabricated movement");
+        free.end_relative();fixture::pointer={10,10};check(free.begin_relative(),"recapture");
+        fixture::pointer={11,12};free.relative_motion(0,0);
+        check(rows[3].host_valid && rows[3].host_dx==1 && rows[3].host_dy==2 && rows[3].capture==3,"recapture anchor");
+        for(unsigned i=4;i<=65536;++i)free.relative_motion(0,0);
+        rows=mac_live_window_pointer_log(&free,&count,&dropped);
+        check(count==65536 && dropped==1 && !free.input_error && !free.input_overflow,"bounded observational truncation");
+        mac_live_event event{};
+        check(mac_live_window_next_event(&free,&event) && event.dx==2 && event.dy==-1,"logging altered delivered movement");
+        check(!mac_live_window_next_event(&free,&event),"logging fabricated motion");
+        free.end_relative();
         std::cout<<"Capture setup, API denial/rollback, unconfined mode and inactive input checks passed.\n";
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

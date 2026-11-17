@@ -90,6 +90,12 @@ Fill in `observations.md` after testing: tester/date, actual actions, expected a
 
 ## Input accounting
 
+For a relative Mac session, add `--pointer-log` to the launcher to retain
+raw mouse counts, scaled guest deltas and sampled Windows-pointer deltas.
+This helps distinguish gain from delivery lag. Read the
+[pointer observation limits](pointer-observation-20261117.md) before comparing
+individual rows; the host-position sample may cover multiple queued packets.
+
 `--live-key-log NEW_PATH` requires `--live` and refuses existing files. The text header is `BHLIVEKEY1 PROFILE STOP_CYCLE COUNT PENDING`, followed by column names and decimal rows: `cycle code pressed extended repeated focus_release`. Mac codes are the existing BootHush M0110 API codes (0–0x39); PC codes are Set 2 packet bodies. PC packets are E0 if extended, F0 if released, then code. Rows preserve acceptance order when cycles are equal. A PC packet waits until all its bytes fit in the controller output queue.
 
 The live JSON object labels `input_source: host_window_messages` and reports accepted keys/bytes, synthetic focus releases, deactivations, pending window keys and logged rows. Acceptance is into the modeled device, not proof that the guest consumed it. Pending controller bytes and guest behavior need separate guest observations. There is no automatic keyboard-log replay command; the mouse trace alone cannot reproduce a session with live keys. Scheduled Mac keys may coexist for diagnostics and their count is reported; the human launcher supplies none. PC live input refuses scheduled scan codes.
