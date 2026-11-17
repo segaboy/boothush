@@ -191,6 +191,14 @@ bool Iwm::enabled(uint64_t cycle) const
     return (control_ & drive_enable) != 0 || cycle < disable_at_;
 }
 
+Iwm::State Iwm::state(uint64_t cycle) const
+{
+    return {inserted_, inserted_, (control_ & external_drive) != 0, enabled(cycle),
+            motor_on_, disk_changed_, outward_, static_cast<uint8_t>(track_), control_, mode_,
+            step_commands_, nibbles_delivered_, disabled_data_reads_, not_ready_data_reads_,
+            ignored_data_writes_, eject_commands_};
+}
+
 bool Iwm::internal_drive(uint64_t cycle) const
 {
     return enabled(cycle) && (control_ & external_drive) == 0;
@@ -217,6 +225,7 @@ void Iwm::drive_command(unsigned command, uint64_t cycle)
     switch (command) {
     case 0: outward_ = false; break;
     case 1:
+        ++step_commands_;
         if (outward_ && track_ != 0) {
             --track_;
         } else if (!outward_ && track_ + 1 < track_count) {
@@ -234,6 +243,7 @@ void Iwm::drive_command(unsigned command, uint64_t cycle)
     case 4: outward_ = true; break;
     case 6: motor_on_ = false; break;
     case 7:
+        ++eject_commands_;
         inserted_ = false;
         disk_changed_ = true;
         motor_on_ = false;
@@ -267,17 +277,21 @@ bool Iwm::drive_sense(bool select, uint64_t cycle) const
 uint8_t Iwm::read_data(uint64_t cycle)
 {
     if (!enabled(cycle)) {
+        ++disabled_data_reads_;
         return 0xff;
     }
     if (!internal_drive(cycle) || !motor_on_ || !inserted_) {
+        ++not_ready_data_reads_;
         return 0;
     }
     const uint64_t slot = (cycle - motor_start_) / cycles_per_nibble;
     if (slot == last_slot_) {
+        ++not_ready_data_reads_;
         return 0;
     }
     last_slot_ = slot;
     const auto &track = tracks_[track_];
+    ++nibbles_delivered_;
     return track[slot % track.size()];
 }
 
@@ -296,8 +310,12 @@ uint8_t Iwm::read(unsigned reg, bool select, uint64_t cycle)
 void Iwm::write(unsigned reg, bool select, uint64_t cycle, uint8_t value)
 {
     switch_line(reg, select, cycle);
-    if ((control_ & (q6 | q7)) == (q6 | q7) && (reg & 1) != 0 && !enabled(cycle)) {
-        mode_ = value;
+    if ((control_ & (q6 | q7)) == (q6 | q7) && (reg & 1) != 0) {
+        if (!enabled(cycle)) {
+            mode_ = value;
+        } else {
+            ++ignored_data_writes_;
+        }
     }
     // Active write strobes never modify the read-only media.
 }

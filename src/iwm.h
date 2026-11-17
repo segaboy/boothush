@@ -10,9 +10,19 @@ namespace boothush {
 
 class Iwm {
 public:
+    struct State {
+        bool media_present, write_protected, external_selected, controller_enabled;
+        bool motor_on, disk_changed, step_outward;
+        uint8_t track, control, mode;
+        uint64_t step_commands, nibbles_delivered, disabled_data_reads, not_ready_data_reads;
+        uint64_t ignored_data_writes, eject_commands;
+    };
+
     bool insert(std::span<const uint8_t> image);
     uint8_t read(unsigned reg, bool select, uint64_t cycle);
     void write(unsigned reg, bool select, uint64_t cycle, uint8_t value);
+    // Copies modeled state only; never touches soft switches or the data latch.
+    State state(uint64_t cycle) const;
 
 private:
     static constexpr unsigned track_count = 80;
@@ -27,6 +37,9 @@ private:
     uint64_t motor_start_ = 0;
     uint64_t disable_at_ = 0;
     uint64_t last_slot_ = UINT64_MAX;
+    uint64_t step_commands_ = 0, nibbles_delivered_ = 0;
+    uint64_t disabled_data_reads_ = 0, not_ready_data_reads_ = 0;
+    uint64_t ignored_data_writes_ = 0, eject_commands_ = 0;
 
     bool enabled(uint64_t cycle) const;
     bool internal_drive(uint64_t cycle) const;

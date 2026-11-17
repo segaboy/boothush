@@ -21,6 +21,50 @@ from track 0 to track 64 first. The Disk Copy fixture verifies nonzero tags.
 ClasSICK's replacement System and original Apple ROM/System interoperability
 still require their own boot images and trials.
 
+## Stopped drive observations
+
+Add `--mac-floppy-state 1` to a bounded `mac128k` run to include a fixed-size
+`mac_floppy` JSON object with `observation: "modeled_iwm"`. The snapshot reads
+stored state at the stopped CPU cycle, without accessing a guest register,
+changing soft switches, consuming a nibble or advancing the guest. The option
+works with or without a floppy and can accompany `--mac-cpu-state 1`,
+`--inspect`, `--until` or `--until-pc`. It accepts only `1`, once, on Mac runs.
+The default result has no `mac_floppy` object.
+
+```powershell
+& $exe --machine mac128k --rom $originalRom --floppy $originalDisk `
+  --cycles 4000000 --timeout-ms 5000 --mac-floppy-state 1 --mac-cpu-state 1
+```
+
+The caller supplies the paths and a cycle budget suitable for that guest.
+This command makes an observation; reaching its cycle limit is not a boot pass.
+
+| Fields | Meaning |
+| --- | --- |
+| `media_present`, `write_protected` | Internal drive media state. All inserted media is protected; both are false after eject or with no disk. |
+| `motor_on`, `disk_changed`, `step_outward`, `track` | Internal drive state; track is 0-79. These remain internal-drive fields when the external drive is selected. |
+| `external_selected`, `controller_enabled` | Raw external-drive selection and effective enable at stop, including the modeled delayed disable. No external drive is present. |
+| `select_line`, `control`, `mode` | VIA PA5 pin level, IWM soft-switch bit field and mode byte. |
+| `step_commands` | Internal-drive step commands, including attempts clamped at track 0 or 79. |
+| `nibbles_delivered` | Encoded track bytes returned by ready data reads, including sync/gap bytes. This is not a decoded sector count. |
+| `disabled_data_reads` | Data-mode reads while the controller is disabled, which return `ff`. These are not delivered media bytes. |
+| `not_ready_data_reads` | Enabled data-mode reads returning zero: absent/external drive, motor off, no media, or a second read in the same nibble slot. |
+| `ignored_data_writes` | Writes to an odd IWM register with Q6 and Q7 high while enabled. Counted even with no media or external selection; no media is modified. Mode writes while disabled are excluded. |
+| `eject_commands` | Internal-drive eject commands, including commands with no disk present. |
+
+The six counters are unsigned 64-bit totals from machine creation; reads of
+the snapshot do not reset them. Counters accrue independently of the CLI flag,
+which controls only reporting. The snapshot contains no disk bytes and no
+event history. It cannot show that the guest decoded or used a sector,
+completed a boot, or matched physical hardware behavior. Pair it with guest
+RAM/register/frame observations and a guest-specific stop condition.
+
+The original floppy tests compare observed and unobserved runs through a
+track-64 sector load: cycles, PC, registers, loaded bytes and framebuffer must
+match. They also check tagged DC42, no-media polling, disabled reads,
+external selection, ignored writes, eject and CLI refusals. Source media is
+checked unchanged. These tests do not use or qualify a historical System Disk.
+
 ## Source and license
 
 The GCR table, rolling checksum algorithm, interleave and Disk Copy layout in

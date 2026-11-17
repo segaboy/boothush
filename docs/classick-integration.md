@@ -197,6 +197,15 @@ Both existing machines can record a bounded headless Y4M video, then use the bun
 
 Mac captures use PBM. PC captures use RGB PPM. EGA graphics capture is available, and `--ega-font PATH` enables a fixed 80×25 text snapshot using a caller-supplied 3,584-byte font. The [EGA reference](ega.md) defines layout and limitations. The [PC/AT profile](pc-at.md) describes 286 hardware and media.
 
+For disk-boot investigation, `--mac-floppy-state 1` adds a side-effect-free
+stopped IWM snapshot and six activity counters. It distinguishes internal
+media/motor/track state, external selection, returned nibbles, unready or
+disabled reads, steps, ignored writes and eject commands. The result is
+labeled `modeled_iwm`; counters do not establish successful guest sector
+decoding or boot. Original generated fixtures compare the observed and
+unobserved run's cycles, registers, loaded RAM and framebuffer. See the
+[floppy observation contract](mac-floppy.md#stopped-drive-observations).
+
 Mac floppy images are currently read-only. The [Mac floppy notes](mac-floppy.md) describe the missing write path. Mac mouse edge spacing and the VBL guard are configurable delivery controls. The model and its timing have not been established against a physical Macintosh. An emulator run alone does not establish physical-hardware behavior or historical System 1 compatibility.
 
 The checked Mac and PC fixtures live in local ClasSICK directories and are optional inputs to BootHush tests. Existing ClasSICK scripts retain their current interface. Update them when they should consume multiple ranges, readiness-relative schedules, or the 286 witness. Run `ctest` with `BOOTHUSH_CLASSICK_LIVE_ROM` set to the intended pinned fixture and inspect its explicit fixture result when verifying the Mac integration.

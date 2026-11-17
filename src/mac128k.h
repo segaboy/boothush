@@ -39,6 +39,17 @@ typedef struct {
 } mac128k_cpu_state;
 bool mac128k_read_cpu_state(const mac128k *machine, mac128k_cpu_state *state);
 
+/* Side-effect-free IWM snapshot. Counters cover this machine's lifetime and
+   count modeled device activity, not completed guest sector reads or boot. */
+typedef struct {
+    bool media_present, write_protected, external_selected, controller_enabled;
+    bool motor_on, disk_changed, step_outward, select_line;
+    uint8_t track, control, mode;
+    uint64_t step_commands, nibbles_delivered, disabled_data_reads, not_ready_data_reads;
+    uint64_t ignored_data_writes, eject_commands;
+} mac128k_floppy_state;
+bool mac128k_read_floppy_state(const mac128k *machine, mac128k_floppy_state *state);
+
 /* M0110 witness kinds 0-8 follow queue, reject, mode, SR write, command
    completion, reply start/completion, key delivery, SR read; 9 is input due. */
 typedef struct { uint64_t cycle,due; uint32_t pc; uint8_t kind,value,queue; } mac128k_keyboard_event;

@@ -152,6 +152,7 @@ struct request {
     bool mouse_witness_detail;
     bool mouse_witness_cpu;
     bool mac_cpu_state;
+    bool mac_floppy_state;
     bool raw_mouse_phases;
     bool relative_motion;
     bool window_input;
@@ -570,6 +571,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mac-cpu-state") == 0 && !request->mac_cpu_state) {
             if (wcscmp(value, L"1") != 0) return "mac-cpu-state requires 1";
             request->mac_cpu_state = true;
+        } else if (wcscmp(option, L"--mac-floppy-state") == 0 && !request->mac_floppy_state) {
+            if (wcscmp(value, L"1") != 0) return "mac-floppy-state requires 1";
+            request->mac_floppy_state = true;
         } else if (wcscmp(option, L"--mouse-witness-cpu") == 0 && !request->mouse_witness_cpu) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-cpu requires 1";
             request->mouse_witness_cpu = true;
@@ -706,6 +710,7 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if((request->series.path!=NULL)!=(request->series.count!=0) ||
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
     if(request->mac_cpu_state && request->machine!=MACHINE_MAC128K) return "mac-cpu-state requires mac128k";
+    if(request->mac_floppy_state && request->machine!=MACHINE_MAC128K) return "mac-floppy-state requires mac128k";
     if(request->series.path && request->machine!=MACHINE_MAC128K) return "capture-series is supported on mac128k and nes";
     if(request->series.path && request->live_scale) return "capture-series does not support live input";
     request->series.replay=request->mouse_replay_path!=NULL;
@@ -1306,12 +1311,28 @@ static void print_result(const char *status, enum machine_kind machine,
                          const struct mouse_session *mouse, const video_capture *video,
                          const struct frame_series *series,const struct keyboard_summary *keyboard,
                          const struct display_summary *display,const struct keyboard_fault_result *fault,
-                         const mac128k_cpu_state *cpu)
+                         const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
     if (machine == MACHINE_MAC128K) {
         printf(",\"machine\":\"mac128k\",\"vbl\":%" PRIu64, state.vbl);
+        if (floppy) {
+            printf(",\"mac_floppy\":{\"observation\":\"modeled_iwm\",\"media_present\":%s,"
+                   "\"write_protected\":%s,\"external_selected\":%s,\"controller_enabled\":%s,"
+                   "\"motor_on\":%s,\"disk_changed\":%s,\"step_outward\":%s,\"select_line\":%s,"
+                   "\"track\":%u,\"control\":%u,\"mode\":%u,"
+                   "\"step_commands\":%" PRIu64 ",\"nibbles_delivered\":%" PRIu64 ","
+                   "\"disabled_data_reads\":%" PRIu64 ",\"not_ready_data_reads\":%" PRIu64 ","
+                   "\"ignored_data_writes\":%" PRIu64 ",\"eject_commands\":%" PRIu64 "}",
+                   floppy->media_present ? "true" : "false", floppy->write_protected ? "true" : "false",
+                   floppy->external_selected ? "true" : "false", floppy->controller_enabled ? "true" : "false",
+                   floppy->motor_on ? "true" : "false", floppy->disk_changed ? "true" : "false",
+                   floppy->step_outward ? "true" : "false", floppy->select_line ? "true" : "false",
+                   (unsigned)floppy->track, (unsigned)floppy->control, (unsigned)floppy->mode,
+                   floppy->step_commands, floppy->nibbles_delivered, floppy->disabled_data_reads,
+                   floppy->not_ready_data_reads, floppy->ignored_data_writes, floppy->eject_commands);
+        }
         if (cpu) {
             printf(",\"cpu\":{\"pc\":%" PRIu32 ",\"sr\":%u,\"d\":[", cpu->pc, (unsigned)cpu->sr);
             for (unsigned i=0; i<8; ++i) printf("%s%" PRIu32, i?",":"", cpu->d[i]);
@@ -1444,7 +1465,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -2386,6 +2407,7 @@ int wmain(int argc, wchar_t **argv)
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
+        "  --mac-floppy-state 1 adds a side-effect-free modeled IWM snapshot and activity counters.\n"
              "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"
              "Convert: --convert-capture INPUT --output OUTPUT (.gif, .mp4 or .png; bundled FFmpeg)\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
@@ -2602,10 +2624,12 @@ int wmain(int argc, wchar_t **argv)
     }
     mac128k_cpu_state cpu={0};
     const bool cpu_observed=request.mac_cpu_state && mac128k_read_cpu_state(machine.mac,&cpu);
+    mac128k_floppy_state floppy={0};
+    const bool floppy_observed=request.mac_floppy_state && mac128k_read_floppy_state(machine.mac,&floppy);
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
                  request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL,
-                 cpu_observed?&cpu:NULL);
+                 cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL);
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

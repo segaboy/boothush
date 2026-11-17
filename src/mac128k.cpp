@@ -758,6 +758,18 @@ bool mac128k_read_cpu_state(const mac128k *machine, mac128k_cpu_state *state)
     return true;
 }
 
+bool mac128k_read_floppy_state(const mac128k *machine, mac128k_floppy_state *state)
+{
+    if (!machine || !state) return false;
+    const auto drive = machine->iwm.state(static_cast<uint64_t>(machine->cpu.getClock()));
+    *state = {drive.media_present, drive.write_protected, drive.external_selected,
+              drive.controller_enabled, drive.motor_on, drive.disk_changed, drive.step_outward,
+              machine->floppy_select_high(), drive.track, drive.control, drive.mode,
+              drive.step_commands, drive.nibbles_delivered, drive.disabled_data_reads,
+              drive.not_ready_data_reads, drive.ignored_data_writes, drive.eject_commands};
+    return true;
+}
+
 void mac128k_set_mouse_button(mac128k *machine, bool pressed)
 {
     if (machine->mouse_pressed == pressed) {

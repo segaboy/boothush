@@ -1,5 +1,6 @@
 import hashlib
 import struct
+import subprocess
 
 from test_boot import BootHushTestCase, ROM_ENTRY, make_rom
 
@@ -175,10 +176,27 @@ class MacintoshFloppyTests(BootHushTestCase):
         self.rom.write_bytes(make_floppy_rom(64, attempt_write=True))
         image.write_bytes(disk_image(64))
         expected_hash = hashlib.sha256(image.read_bytes()).digest()
-        result = self.boot(
-            "--floppy", image, "--until", "0xb00:1:0xa5", "--inspect", "0x100c:512",
-            cycles=4_000_000,
-        )
+        args = ("--floppy", image, "--until", "0xb00:1:0xa5", "--inspect", "0x100c:512",
+                "--mac-cpu-state", "1")
+        plain_frame, observed_frame = self.scratch / "plain.pbm", self.scratch / "observed.pbm"
+        plain = self.boot(*args, "--frame", plain_frame, cycles=4_000_000)
+        result = self.boot(*args, "--frame", observed_frame, "--mac-floppy-state", "1", cycles=4_000_000)
+        floppy = result.pop("mac_floppy")
+        self.assertEqual(floppy["observation"], "modeled_iwm")
+        self.assertTrue(floppy["media_present"])
+        self.assertTrue(floppy["write_protected"])
+        self.assertTrue(floppy["controller_enabled"])
+        self.assertTrue(floppy["motor_on"])
+        self.assertFalse(floppy["external_selected"])
+        self.assertFalse(floppy["select_line"])
+        self.assertEqual(floppy["track"], 64)
+        self.assertEqual(floppy["step_commands"], 64)
+        self.assertEqual(floppy["ignored_data_writes"], 1)
+        self.assertEqual(floppy["eject_commands"], 0)
+        self.assertGreaterEqual(floppy["nibbles_delivered"], 705)
+        self.assertGreater(floppy["not_ready_data_reads"], 0)
+        self.assertEqual(result, plain)  # Includes cycles, PC, all registers and loaded bytes.
+        self.assertEqual(plain_frame.read_bytes(), observed_frame.read_bytes())
         self.assertEqual(result["status"], "condition_met")
         self.assertEqual(bytes.fromhex(result["memory"]["bytes"]), sector_payload())
         self.assertEqual(hashlib.sha256(image.read_bytes()).digest(), expected_hash)
@@ -191,10 +209,13 @@ class MacintoshFloppyTests(BootHushTestCase):
         image.write_bytes(disk_copy_image(disk_image(0), tags))
         result = self.boot(
             "--floppy", image, "--until", "0xb00:1:0xa5", "--inspect", "0x1000:524",
-            cycles=4_000_000,
+            "--mac-floppy-state", "1", cycles=4_000_000,
         )
         self.assertEqual(result["status"], "condition_met")
         self.assertEqual(bytes.fromhex(result["memory"]["bytes"]), tag + sector_payload())
+        self.assertEqual(result["mac_floppy"]["track"], 0)
+        self.assertEqual(result["mac_floppy"]["step_commands"], 0)
+        self.assertEqual(result["mac_floppy"]["ignored_data_writes"], 0)
 
     def test_disk_copy_checksum_mismatch_is_rejected(self):
         image = self.scratch / "damaged.image"
@@ -215,14 +236,68 @@ class MacintoshFloppyTests(BootHushTestCase):
         )))
         image = self.scratch / "raw.dsk"
         image.write_bytes(disk_image(0))
-        result = self.boot("--floppy", image, "--inspect", "0xb00:2")
+        result = self.boot("--floppy", image, "--inspect", "0xb00:2", "--mac-floppy-state", "1")
         self.assertEqual(result["status"], "cycle_limit")
         self.assertEqual(result["memory"]["bytes"], "20a0")
+        self.assertTrue(result["mac_floppy"]["external_selected"])
+        self.assertTrue(result["mac_floppy"]["select_line"])
+        self.assertFalse(result["mac_floppy"]["motor_on"])
+        self.assertEqual(result["mac_floppy"]["nibbles_delivered"], 0)
 
     def test_no_disk_never_executes_a_boot_sector(self):
         self.rom.write_bytes(make_floppy_rom())
         result = self.boot(
-            "--until", "0xb00:1:0xa5", "--inspect", "0xb00:1", cycles=500_000, exit_code=1,
+            "--until", "0xb00:1:0xa5", "--inspect", "0xb00:1", "--mac-floppy-state", "1",
+            cycles=500_000, exit_code=1,
         )
         self.assertEqual(result["status"], "cycle_limit")
         self.assertEqual(result["memory"]["bytes"], "00")
+        self.assertFalse(result["mac_floppy"]["media_present"])
+        self.assertFalse(result["mac_floppy"]["write_protected"])
+        self.assertEqual(result["mac_floppy"]["nibbles_delivered"], 0)
+        self.assertGreater(result["mac_floppy"]["not_ready_data_reads"], 0)
+
+    def test_floppy_snapshot_distinguishes_disabled_reads_from_nibbles(self):
+        self.rom.write_bytes(make_rom(bytes.fromhex("4a39 00c0 0000 60fe")))
+        result = self.boot("--mac-floppy-state", "1")
+        floppy = result["mac_floppy"]
+        self.assertFalse(floppy["controller_enabled"])
+        self.assertFalse(floppy["motor_on"])
+        self.assertEqual(floppy["disabled_data_reads"], 1)
+        self.assertEqual(floppy["not_ready_data_reads"], 0)
+        self.assertEqual(floppy["nibbles_delivered"], 0)
+
+    def test_floppy_snapshot_records_eject_without_editing_media(self):
+        # Select internal motor-on command 2, then eject command 7.
+        self.rom.write_bytes(make_rom(bytes.fromhex(
+            "13fc 0000 00ef fffe 13fc 0030 00ef e7fe "
+            "4a39 00c0 1200 4a39 00c0 0600 4a39 00c0 0e00 4a39 00c0 0c00 "
+            "4a39 00c0 0200 4a39 00c0 0a00 4a39 00c0 0e00 60fe"
+        )))
+        image = self.scratch / "eject.dsk"
+        original = disk_image(0)
+        image.write_bytes(original)
+        result = self.boot("--floppy", image, "--mac-floppy-state", "1")
+        floppy = result["mac_floppy"]
+        self.assertFalse(floppy["media_present"])
+        self.assertFalse(floppy["write_protected"])
+        self.assertFalse(floppy["motor_on"])
+        self.assertTrue(floppy["disk_changed"])
+        self.assertEqual(floppy["eject_commands"], 1)
+        self.assertEqual(image.read_bytes(), original)
+
+    def test_floppy_snapshot_rejects_invalid_options_and_other_machine(self):
+        for options in (("--mac-floppy-state", "0"), ("--mac-floppy-state", "2"),
+                        ("--mac-floppy-state", "1", "--mac-floppy-state", "1")):
+            with self.subTest(options=options):
+                result = self.boot(*options, exit_code=2)
+                self.assertEqual(result["status"], "error")
+                self.assertNotIn("mac_floppy", result)
+        process = subprocess.run(
+            [self.exe, "--machine", "pc286", "--cycles", "100", "--timeout-ms", "100",
+             "--mac-floppy-state", "1"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("mac-floppy-state requires mac128k", process.stdout)
