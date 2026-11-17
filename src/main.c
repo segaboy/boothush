@@ -153,6 +153,8 @@ struct request {
     bool mouse_witness_cpu;
     bool mac_cpu_state;
     bool mac_floppy_state;
+    bool mac_floppy_bad_checksum_set;
+    uint32_t mac_floppy_bad_checksum[2];
     bool raw_mouse_phases;
     bool relative_motion;
     bool window_input;
@@ -574,6 +576,11 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mac-floppy-state") == 0 && !request->mac_floppy_state) {
             if (wcscmp(value, L"1") != 0) return "mac-floppy-state requires 1";
             request->mac_floppy_state = true;
+        } else if (wcscmp(option, L"--mac-floppy-bad-checksum") == 0 && !request->mac_floppy_bad_checksum_set) {
+            if (!parse_fields(value, fields, 2) || fields[0] >= 80 || fields[1] >= 12 - fields[0] / 16)
+                return "mac-floppy-bad-checksum requires zero-based track:sector within Macintosh 400 KiB geometry";
+            request->mac_floppy_bad_checksum_set = true;
+            memcpy(request->mac_floppy_bad_checksum, fields, sizeof(request->mac_floppy_bad_checksum));
         } else if (wcscmp(option, L"--mouse-witness-cpu") == 0 && !request->mouse_witness_cpu) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-cpu requires 1";
             request->mouse_witness_cpu = true;
@@ -711,6 +718,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
     if(request->mac_cpu_state && request->machine!=MACHINE_MAC128K) return "mac-cpu-state requires mac128k";
     if(request->mac_floppy_state && request->machine!=MACHINE_MAC128K) return "mac-floppy-state requires mac128k";
+    if(request->mac_floppy_bad_checksum_set && (request->machine!=MACHINE_MAC128K || !request->floppy_path))
+        return "mac-floppy-bad-checksum requires mac128k and floppy";
     if(request->series.path && request->machine!=MACHINE_MAC128K) return "capture-series is supported on mac128k and nes";
     if(request->series.path && request->live_scale) return "capture-series does not support live input";
     request->series.replay=request->mouse_replay_path!=NULL;
@@ -1311,12 +1320,18 @@ static void print_result(const char *status, enum machine_kind machine,
                          const struct mouse_session *mouse, const video_capture *video,
                          const struct frame_series *series,const struct keyboard_summary *keyboard,
                          const struct display_summary *display,const struct keyboard_fault_result *fault,
-                         const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy)
+                         const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy,
+                         const mac128k_floppy_checksum_fault *floppy_fault)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
     if (machine == MACHINE_MAC128K) {
         printf(",\"machine\":\"mac128k\",\"vbl\":%" PRIu64, state.vbl);
+        if (floppy_fault) {
+            printf(",\"mac_floppy_checksum_fault\":{\"kind\":\"synthetic_gcr_data_checksum\","
+                   "\"mode\":\"persistent\",\"track\":%u,\"sector\":%u,\"altered_nibbles\":%" PRIu64 "}",
+                   (unsigned)floppy_fault->track, (unsigned)floppy_fault->sector, floppy_fault->altered_nibbles);
+        }
         if (floppy) {
             printf(",\"mac_floppy\":{\"observation\":\"modeled_iwm\",\"media_present\":%s,"
                    "\"write_protected\":%s,\"external_selected\":%s,\"controller_enabled\":%s,"
@@ -1465,7 +1480,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -2408,6 +2423,7 @@ int wmain(int argc, wchar_t **argv)
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
         "  --mac-floppy-state 1 adds a side-effect-free modeled IWM snapshot and activity counters.\n"
+        "  --mac-floppy-bad-checksum TRACK:SECTOR injects a persistent synthetic sector checksum error.\n"
              "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"
              "Convert: --convert-capture INPUT --output OUTPUT (.gif, .mp4 or .png; bundled FFmpeg)\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
@@ -2451,6 +2467,9 @@ int wmain(int argc, wchar_t **argv)
     }
     struct machine machine = {0};
     error = create_machine(&machine, &request);
+    if (error == NULL && request.mac_floppy_bad_checksum_set &&
+        !mac128k_inject_floppy_bad_checksum(machine.mac, request.mac_floppy_bad_checksum[0], request.mac_floppy_bad_checksum[1]))
+        error = "cannot configure Macintosh floppy checksum fault";
     if (error == NULL && request.fail_floppy_read_set &&
         !pc286_fail_floppy_read(machine.pc, request.fail_floppy_read[0], request.fail_floppy_read[1], request.fail_floppy_read[2]))
         error = "cannot configure floppy read failure";
@@ -2626,10 +2645,13 @@ int wmain(int argc, wchar_t **argv)
     const bool cpu_observed=request.mac_cpu_state && mac128k_read_cpu_state(machine.mac,&cpu);
     mac128k_floppy_state floppy={0};
     const bool floppy_observed=request.mac_floppy_state && mac128k_read_floppy_state(machine.mac,&floppy);
+    mac128k_floppy_checksum_fault floppy_fault={0};
+    const bool floppy_fault_observed=request.mac_floppy_bad_checksum_set &&
+        mac128k_read_floppy_checksum_fault(machine.mac,&floppy_fault) && floppy_fault.enabled;
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
                  request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL,
-                 cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL);
+                 cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL,floppy_fault_observed?&floppy_fault:NULL);
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

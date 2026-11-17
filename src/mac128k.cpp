@@ -770,6 +770,19 @@ bool mac128k_read_floppy_state(const mac128k *machine, mac128k_floppy_state *sta
     return true;
 }
 
+bool mac128k_inject_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector)
+{
+    return machine && machine->iwm.inject_bad_checksum(track, sector);
+}
+
+bool mac128k_read_floppy_checksum_fault(const mac128k *machine, mac128k_floppy_checksum_fault *state)
+{
+    if (!machine || !state) return false;
+    const auto fault = machine->iwm.checksum_fault();
+    *state = {fault.enabled, fault.track, fault.sector, fault.altered_nibbles};
+    return true;
+}
+
 void mac128k_set_mouse_button(mac128k *machine, bool pressed)
 {
     if (machine->mouse_pressed == pressed) {

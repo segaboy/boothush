@@ -206,6 +206,15 @@ decoding or boot. Original generated fixtures compare the observed and
 unobserved run's cycles, registers, loaded RAM and framebuffer. See the
 [floppy observation contract](mac-floppy.md#stopped-drive-observations).
 
+For guest disk-error branches, `--mac-floppy-bad-checksum TRACK:SECTOR`
+injects a persistent synthetic checksum error into one selected sector's IWM
+read stream. The raw/DC42 input remains unchanged. Original guest fixtures
+verify rejection and retry, nonmatching selection, and fresh-run recovery
+with injection removed; they do not qualify a historical System Disk. The
+[checksum-fault contract](mac-floppy.md#synthetic-sector-checksum-failures)
+defines zero-based zone geometry and distinguishes altered returned nibbles
+from guest-observed errors.
+
 Mac floppy images are currently read-only. The [Mac floppy notes](mac-floppy.md) describe the missing write path. Mac mouse edge spacing and the VBL guard are configurable delivery controls. The model and its timing have not been established against a physical Macintosh. An emulator run alone does not establish physical-hardware behavior or historical System 1 compatibility.
 
 The checked Mac and PC fixtures live in local ClasSICK directories and are optional inputs to BootHush tests. Existing ClasSICK scripts retain their current interface. Update them when they should consume multiple ranges, readiness-relative schedules, or the 286 witness. Run `ctest` with `BOOTHUSH_CLASSICK_LIVE_ROM` set to the intended pinned fixture and inspect its explicit fixture result when verifying the Mac integration.

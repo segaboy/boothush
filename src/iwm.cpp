@@ -98,8 +98,8 @@ void append_gcr(std::vector<uint8_t> &track, uint8_t a, uint8_t b, uint8_t c, bo
     }
 }
 
-void append_sector(std::vector<uint8_t> &track, unsigned cylinder, unsigned sector,
-                   std::span<const uint8_t> data, std::span<const uint8_t> tags)
+uint32_t append_sector(std::vector<uint8_t> &track, unsigned cylinder, unsigned sector,
+                       std::span<const uint8_t> data, std::span<const uint8_t> tags)
 {
     const unsigned track_low = cylinder & 63;
     const unsigned track_high = cylinder >> 6;
@@ -133,11 +133,15 @@ void append_sector(std::vector<uint8_t> &track, unsigned cylinder, unsigned sect
         checksum_c = last ? rotated_c : static_cast<uint8_t>(rotated_c + c + (sum_b >> 8));
         append_gcr(track, a ^ rotated_c, b ^ checksum_a, c ^ checksum_b, last);
     }
+    // The second checksum nibble contains checksum A's low six bits.
+    const auto checksum_offset = static_cast<uint32_t>(track.size() + 1);
     append_gcr(track, checksum_a, checksum_b, checksum_c);
     track.insert(track.end(), {0xde, 0xaa, 0xff, 0xff});
+    return checksum_offset;
 }
 
-std::vector<uint8_t> encode_track(const Payload &payload, unsigned cylinder, unsigned first_sector)
+std::vector<uint8_t> encode_track(const Payload &payload, unsigned cylinder, unsigned first_sector,
+                                  std::array<uint32_t, 12> &checksum_offsets)
 {
     const unsigned zone = cylinder / tracks_per_zone;
     const unsigned count = 12 - zone;
@@ -158,7 +162,7 @@ std::vector<uint8_t> encode_track(const Payload &payload, unsigned cylinder, uns
         const auto data = payload.sectors.subspan(logical * sector_bytes, sector_bytes);
         const auto tags = payload.tags.empty() ? payload.tags :
             payload.tags.subspan(logical * tag_bytes, tag_bytes);
-        append_sector(encoded, cylinder, sector, data, tags);
+        checksum_offsets[sector] = append_sector(encoded, cylinder, sector, data, tags);
     }
     if (encoded.size() < slots) {
         encoded.resize(slots, 0xff);
@@ -175,14 +179,30 @@ bool Iwm::insert(std::span<const uint8_t> image)
         return false;
     }
     decltype(tracks_) tracks;
+    decltype(checksum_offsets_) checksums{};
     for (unsigned cylinder = 0, sector = 0; cylinder < track_count; ++cylinder) {
-        tracks[cylinder] = encode_track(payload, cylinder, sector);
+        tracks[cylinder] = encode_track(payload, cylinder, sector, checksums[cylinder]);
         sector += 12 - cylinder / tracks_per_zone;
     }
     tracks_ = std::move(tracks);
+    checksum_offsets_ = checksums;
+    checksum_fault_ = {};
     inserted_ = true;
     disk_changed_ = true;
     last_slot_ = UINT64_MAX;
+    return true;
+}
+
+bool Iwm::inject_bad_checksum(unsigned track, unsigned sector)
+{
+    if (!inserted_ || track >= track_count || sector >= 12 - track / tracks_per_zone) {
+        return false;
+    }
+    const uint8_t original = tracks_[track][checksum_offsets_[track][sector]];
+    const auto code = std::find(gcr.begin(), gcr.end(), original);
+    if (code == gcr.end()) return false;
+    bad_checksum_nibble_ = gcr[static_cast<size_t>(code - gcr.begin()) ^ 1];
+    checksum_fault_ = {true, static_cast<uint8_t>(track), static_cast<uint8_t>(sector), 0};
     return true;
 }
 
@@ -292,7 +312,13 @@ uint8_t Iwm::read_data(uint64_t cycle)
     last_slot_ = slot;
     const auto &track = tracks_[track_];
     ++nibbles_delivered_;
-    return track[slot % track.size()];
+    const size_t offset = slot % track.size();
+    if (checksum_fault_.enabled && track_ == checksum_fault_.track &&
+        offset == checksum_offsets_[track_][checksum_fault_.sector]) {
+        ++checksum_fault_.altered_nibbles;
+        return bad_checksum_nibble_;
+    }
+    return track[offset];
 }
 
 uint8_t Iwm::read(unsigned reg, bool select, uint64_t cycle)

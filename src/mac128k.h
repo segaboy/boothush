@@ -50,6 +50,16 @@ typedef struct {
 } mac128k_floppy_state;
 bool mac128k_read_floppy_state(const mac128k *machine, mac128k_floppy_state *state);
 
+/* Synthetic GCR checksum fault, not a disk-health or successful-read report.
+   Reconfiguration resets altered_nibbles; successful insertion clears it. */
+typedef struct {
+    bool enabled;
+    uint8_t track, sector;
+    uint64_t altered_nibbles;
+} mac128k_floppy_checksum_fault;
+bool mac128k_inject_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector);
+bool mac128k_read_floppy_checksum_fault(const mac128k *machine, mac128k_floppy_checksum_fault *state);
+
 /* M0110 witness kinds 0-8 follow queue, reject, mode, SR write, command
    completion, reply start/completion, key delivery, SR read; 9 is input due. */
 typedef struct { uint64_t cycle,due; uint32_t pc; uint8_t kind,value,queue; } mac128k_keyboard_event;

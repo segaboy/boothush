@@ -15,7 +15,7 @@ GCR = bytes.fromhex(
 )
 
 
-def make_floppy_rom(steps=0, attempt_write=False):
+def make_floppy_rom(steps=0, attempt_write=False, sector=0, retries=0):
     """Assemble a small MC68000 boot ROM that reads and checks one real GCR sector."""
     code = bytearray()
     labels = {}
@@ -64,6 +64,7 @@ def make_floppy_rom(steps=0, attempt_write=False):
         iwm_switch(13)  # Q6 high.
         emit("13fc 00ff 00c0 1e00")  # Q7 high and a guest write to the data register.
         iwm_switch(14)
+    label("sector_read")
     emit("41f9 00c0 1800")  # LEA Q6-low/data address,A0.
     emit("43f9")  # LEA inverse GCR table,A1.
     absolute.append((len(code), "gcr_table"))
@@ -72,12 +73,12 @@ def make_floppy_rom(steps=0, attempt_write=False):
 
     prologue("address_mark", 0x96)
     compare_byte(GCR[steps & 63], "address_mark")  # Track low bits.
-    compare_byte(GCR[0], "address_mark")  # Sector 0 on the selected track.
+    compare_byte(GCR[sector], "address_mark")
     compare_byte(GCR[steps >> 6], "fault")  # Track high bit, side 0.
     compare_byte(GCR[2], "fault")  # Single-sided format.
-    compare_byte(GCR[(steps & 63) ^ (steps >> 6) ^ 2], "fault")
+    compare_byte(GCR[(steps & 63) ^ sector ^ (steps >> 6) ^ 2], "fault")
     prologue("data_mark", 0xAD)
-    compare_byte(GCR[0], "fault")  # Data field's duplicate sector number.
+    compare_byte(GCR[sector], "fault")  # Data field's duplicate sector number.
 
     # Buffer the 699 data nibbles, four checksum nibbles, and two epilogue bytes
     # at media speed. The decoded payload and the nibble buffer are disjoint.
@@ -130,6 +131,10 @@ def make_floppy_rom(steps=0, attempt_write=False):
     branch("6a00", "read")  # Poll until the data latch contains a complete nibble.
     emit("4e75")
     label("fault")
+    if retries:
+        emit("5239 0000 0b01")  # ADDQ.B #1,$B01: count rejected reads.
+        emit(f"0c39 {retries + 1:04x} 0000 0b01")  # CMPI.B #attempts,$B01.
+        branch("6500", "sector_read")  # BCS: retry from an address mark.
     emit("13fc 00ee 0000 0b00 60fe")  # Error marker, then spin.
 
     label("gcr_table")
@@ -146,9 +151,9 @@ def sector_payload():
     return program + bytes((i * 89 + 13) & 255 for i in range(SECTOR_SIZE - len(program)))
 
 
-def disk_image(track):
+def disk_image(track, sector=0):
     image = bytearray(FLOPPY_SIZE)
-    first = sum(12 - cylinder // 16 for cylinder in range(track)) * SECTOR_SIZE
+    first = (sum(12 - cylinder // 16 for cylinder in range(track)) + sector) * SECTOR_SIZE
     image[first : first + SECTOR_SIZE] = sector_payload()
     return image
 
@@ -222,8 +227,11 @@ class MacintoshFloppyTests(BootHushTestCase):
         payload = disk_copy_image(disk_image(0), b"")
         payload[84] ^= 1
         image.write_bytes(payload)
-        result = self.boot("--floppy", image, exit_code=2)
-        self.assertEqual(result["status"], "error")
+        for options in ((), ("--mac-floppy-bad-checksum", "0:0")):
+            with self.subTest(options=options):
+                result = self.boot("--floppy", image, *options, exit_code=2)
+                self.assertEqual(result["status"], "error")
+                self.assertNotIn("mac_floppy_checksum_fault", result)
 
     def test_iwm_sense_reports_read_only_disk_and_absent_external_drive(self):
         self.rom.write_bytes(make_rom(bytes.fromhex(
@@ -301,3 +309,93 @@ class MacintoshFloppyTests(BootHushTestCase):
         )
         self.assertEqual(process.returncode, 2)
         self.assertIn("mac-floppy-state requires mac128k", process.stdout)
+
+    def test_bad_checksum_repeats_on_guest_retry_and_recovers_in_a_fresh_run(self):
+        for format_name, track, sector in (("raw", 64, 7), ("dc42", 0, 11)):
+            with self.subTest(format=format_name):
+                self.rom.write_bytes(make_floppy_rom(track, sector=sector, retries=1))
+                sectors = disk_image(track, sector)
+                tags = bytes(range(12)) * 800 if format_name == "dc42" else b""
+                contents = disk_copy_image(sectors, tags) if tags else sectors
+                image = self.scratch / f"retry-{format_name}.img"
+                image.write_bytes(contents)
+                source_hash = hashlib.sha256(image.read_bytes()).digest()
+                args = ("--floppy", image, "--inspect", "0xb00:2", "--inspect", "0x1000:524",
+                        "--inspect", "0x2000:705", "--mac-cpu-state", "1", "--mac-floppy-state", "1")
+                healthy = self.boot(*args, "--until", "0xb00:1:0xa5", cycles=4_000_000)
+                fault_args = (*args, "--until", "0xb00:1:0xee", "--mac-floppy-bad-checksum", f"{track}:{sector}")
+                failed = self.boot(*fault_args, cycles=4_000_000)
+                repeated = self.boot(*fault_args, cycles=4_000_000)
+                self.assertEqual(failed, repeated)
+                self.assertEqual(failed["status"], "condition_met")
+                self.assertEqual(failed["memory_ranges"][0]["bytes"], "ee02")
+                self.assertEqual(failed["mac_floppy_checksum_fault"], {
+                    "kind": "synthetic_gcr_data_checksum", "mode": "persistent",
+                    "track": track, "sector": sector, "altered_nibbles": 2,
+                })
+                expected = (bytes(range(12)) if tags else bytes(12)) + sector_payload()
+                self.assertEqual(bytes.fromhex(failed["memory_ranges"][1]["bytes"]), expected)
+                normal_nibbles = bytes.fromhex(healthy["memory_ranges"][2]["bytes"])
+                bad_nibbles = bytes.fromhex(failed["memory_ranges"][2]["bytes"])
+                self.assertEqual([i for i, (a, b) in enumerate(zip(normal_nibbles, bad_nibbles)) if a != b], [700])
+                self.assertEqual(GCR.index(bad_nibbles[700]), GCR.index(normal_nibbles[700]) ^ 1)
+                recovered = self.boot(*args, "--until", "0xb00:1:0xa5", cycles=4_000_000)
+                self.assertEqual(healthy, recovered)
+                self.assertEqual(healthy["memory_ranges"][0]["bytes"], "a500")
+                self.assertNotIn("mac_floppy_checksum_fault", recovered)
+                self.assertEqual(hashlib.sha256(image.read_bytes()).digest(), source_hash)
+
+    def test_bad_checksum_selects_last_sector_in_each_speed_zone(self):
+        for track, sector in ((0, 11), (16, 10), (32, 9), (48, 8), (64, 7), (79, 7)):
+            with self.subTest(track=track, sector=sector):
+                self.rom.write_bytes(make_floppy_rom(track, sector=sector))
+                image = self.scratch / f"zone-{track}.dsk"
+                image.write_bytes(disk_image(track, sector))
+                args = ("--floppy", image, "--inspect", "0x100c:512")
+                normal = self.boot(*args, "--until", "0xb00:1:0xa5", cycles=4_000_000)
+                failed = self.boot(*args, "--until", "0xb00:1:0xee",
+                                   "--mac-floppy-bad-checksum", f"{track}:{sector}", cycles=4_000_000)
+                self.assertEqual(normal["status"], "condition_met")
+                self.assertEqual(failed["status"], "condition_met")
+                self.assertEqual(failed["mac_floppy_checksum_fault"]["altered_nibbles"], 1)
+                self.assertEqual(bytes.fromhex(failed["memory"]["bytes"]), sector_payload())
+
+    def test_bad_checksum_other_track_or_sector_preserves_the_read(self):
+        self.rom.write_bytes(make_floppy_rom())
+        image = self.scratch / "selection.dsk"
+        image.write_bytes(disk_image(0))
+        args = ("--floppy", image, "--until", "0xb00:1:0xa5", "--inspect", "0x1000:524", "--mac-cpu-state", "1")
+        normal = self.boot(*args, cycles=4_000_000)
+        for selection in ("0:1", "16:0"):
+            with self.subTest(selection=selection):
+                result = self.boot(*args, "--mac-floppy-bad-checksum", selection, cycles=4_000_000)
+                fault = result.pop("mac_floppy_checksum_fault")
+                self.assertEqual(fault["altered_nibbles"], 0)
+                self.assertEqual(result, normal)
+
+    def test_bad_checksum_without_guest_access_is_configured_but_unused(self):
+        image = self.scratch / "unused.dsk"
+        image.write_bytes(disk_image(0))
+        result = self.boot("--floppy", image, "--mac-floppy-bad-checksum", "0:0")
+        self.assertEqual(result["mac_floppy_checksum_fault"]["altered_nibbles"], 0)
+        self.assertNotIn("mac_floppy", result)
+
+    def test_bad_checksum_rejects_invalid_geometry_and_missing_media(self):
+        image = self.scratch / "valid.dsk"
+        image.write_bytes(disk_image(0))
+        for selection in ("80:0", "0:12", "16:11", "32:10", "48:9", "64:8", "79:8", "-1:0", "0", "0:0:0"):
+            with self.subTest(selection=selection):
+                result = self.boot("--floppy", image, "--mac-floppy-bad-checksum", selection, exit_code=2)
+                self.assertEqual(result["status"], "error")
+                self.assertNotIn("mac_floppy_checksum_fault", result)
+        for options in (("--mac-floppy-bad-checksum", "0:0"),
+                        ("--floppy", image, "--mac-floppy-bad-checksum", "0:0", "--mac-floppy-bad-checksum", "0:0")):
+            self.assertEqual(self.boot(*options, exit_code=2)["status"], "error")
+        process = subprocess.run(
+            [self.exe, "--machine", "pc286", "--cycles", "100", "--timeout-ms", "100",
+             "--floppy", image, "--mac-floppy-bad-checksum", "0:0"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("mac-floppy-bad-checksum requires mac128k and floppy", process.stdout)

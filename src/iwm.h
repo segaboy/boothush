@@ -17,16 +17,27 @@ public:
         uint64_t step_commands, nibbles_delivered, disabled_data_reads, not_ready_data_reads;
         uint64_t ignored_data_writes, eject_commands;
     };
+    struct ChecksumFault {
+        bool enabled = false;
+        uint8_t track = 0, sector = 0;
+        uint64_t altered_nibbles = 0;
+    };
 
     bool insert(std::span<const uint8_t> image);
     uint8_t read(unsigned reg, bool select, uint64_t cycle);
     void write(unsigned reg, bool select, uint64_t cycle, uint8_t value);
     // Copies modeled state only; never touches soft switches or the data latch.
     State state(uint64_t cycle) const;
+    // Configures a persistent synthetic checksum error on inserted media.
+    bool inject_bad_checksum(unsigned track, unsigned sector);
+    ChecksumFault checksum_fault() const { return checksum_fault_; }
 
 private:
     static constexpr unsigned track_count = 80;
     std::array<std::vector<uint8_t>, track_count> tracks_{};
+    std::array<std::array<uint32_t, 12>, track_count> checksum_offsets_{};
+    ChecksumFault checksum_fault_{};
+    uint8_t bad_checksum_nibble_ = 0;
     uint8_t control_ = 0;
     uint8_t mode_ = 0;
     unsigned track_ = 0;

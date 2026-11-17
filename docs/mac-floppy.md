@@ -65,6 +65,58 @@ match. They also check tagged DC42, no-media polling, disabled reads,
 external selection, ignored writes, eject and CLI refusals. Source media is
 checked unchanged. These tests do not use or qualify a historical System Disk.
 
+## Synthetic sector checksum failures
+
+`--mac-floppy-bad-checksum TRACK:SECTOR` exercises a guest's checksum-error
+path through the IWM data stream. It requires `mac128k` and a valid inserted
+floppy, and accepts one selection per run. Both numbers are zero-based.
+Track must be 0-79; sectors are 0-11 on tracks 0-15, 0-10 on 16-31, 0-9 on
+32-47, 0-8 on 48-63, and 0-7 on 64-79. Invalid options or source images are
+rejected before execution. DC42 container checksums must still be valid.
+
+```powershell
+& $exe --machine mac128k --rom $originalRom --floppy $originalDisk `
+  --cycles 4000000 --timeout-ms 5000 --mac-floppy-bad-checksum 64:7 `
+  --mac-floppy-state 1
+```
+
+When the selected sector's checksum-A low-six-bit nibble is returned by a
+ready read, BootHush toggles bit 0 of its decoded GCR symbol and returns the
+corresponding valid GCR byte. Only that checksum byte differs. Sector headers,
+data, tags, epilogues and modeled nibble timing remain unchanged. The source
+file and private encoded tracks are not modified. The fault persists on subsequent rotations
+and guest retries; it does not synthesize a BIOS/ROM error code or a physical
+disk defect. The guest must detect and handle the incorrect checksum.
+
+Every run with the option reports `mac_floppy_checksum_fault`, even without
+`--mac-floppy-state`:
+
+```json
+{"kind":"synthetic_gcr_data_checksum","mode":"persistent","track":64,"sector":7,"altered_nibbles":2}
+```
+
+`altered_nibbles` counts actual modified return values, not sectors decoded,
+guest retries, completed reads or errors noticed by the guest. Zero means the
+selected checksum nibble was never returned before stop; merely passing its
+rotational position does not count. The object is absent when injection is
+not requested. Use guest state and the stop result to assess error handling.
+
+The internal C API configures the fault only on inserted media. Successful
+reconfiguration resets its count; successful media insertion clears the
+fault. Failed configuration or insertion preserves the previous media and
+fault state. Eject retains the report but no further data is returned until
+another insertion. Reading the fault report is side-effect-free.
+
+Original raw and tagged-DC42 fixtures reject the selected sector twice via a
+guest retry, while retaining the exact decoded payload and tags. Their
+captured GCR buffers differ from normal reads at exactly the selected checksum
+byte. Repeated faulty runs match; fresh runs with injection removed load and
+execute the sector again with unchanged source hashes. This is recovery by
+removing a synthetic fault between runs, not a successful retry while the
+persistent fault is active. Additional fixtures cover each zone's final
+sector, track 79, nonmatching selections, unused injection and validation
+refusals. No historical System Disk is used or qualified by these tests.
+
 ## Source and license
 
 The GCR table, rolling checksum algorithm, interleave and Disk Copy layout in
