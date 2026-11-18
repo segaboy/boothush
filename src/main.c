@@ -35,6 +35,7 @@ enum {
     LIVE_PUMP_INTERVAL_MS = 2,
 };
 #define MAX_CYCLES UINT32_C(4000000000)
+#define MAX_RUN_CYCLES UINT64_C(20000000000)
 
 struct predicate {
     uint32_t address;
@@ -102,7 +103,7 @@ struct request {
     uint32_t keyboard_fault[4];
     const wchar_t *display_witness_path;
     const wchar_t *pc_witness_path;
-    uint32_t cycle_limit;
+    uint64_t cycle_limit;
     uint32_t timeout_ms;
     uint32_t video_fps, video_limit, video_start;
     bool video_fps_set, video_limit_set, video_start_set;
@@ -111,7 +112,7 @@ struct request {
     struct inspection pc_witness_memory, pc_witness_io;
     struct inspection mouse_witness_memory;
     struct inspection display_witness_memory;
-    uint32_t pc_witness_first, pc_witness_last;
+    uint64_t pc_witness_first, pc_witness_last;
     bool pc_witness_cycles_set;
     bool fail_floppy_read_set;
     uint32_t fail_floppy_read[3];
@@ -137,8 +138,8 @@ struct request {
     uint32_t live_mouse_gain;
     uint32_t mouse_edge_cycles;
     uint32_t mouse_vbl_guard;
-    uint32_t mouse_witness_first;
-    uint32_t mouse_witness_last;
+    uint64_t mouse_witness_first;
+    uint64_t mouse_witness_last;
     uint32_t keyboard_witness_first,keyboard_witness_last;
     uint32_t keyboard_witness_limit;
     uint32_t display_witness_first,display_witness_last;
@@ -653,10 +654,11 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
                 return "invalid scancode cycle:byte event or input order";
             }
         } else if (wcscmp(option, L"--cycles") == 0 && request->cycle_limit == 0) {
-            if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > MAX_CYCLES) {
-                return "cycles must be between 1 and 4000000000";
+            uint64_t limit;
+            if (!parse_u64(value, &limit) || limit == 0 || limit > MAX_RUN_CYCLES) {
+                return "cycles must be between 1 and 20000000000";
             }
-            request->cycle_limit = fields[0];
+            request->cycle_limit = limit;
         } else if (wcscmp(option, L"--timeout-ms") == 0 && request->timeout_ms == 0) {
             if (!parse_fields(value, fields, 1) || fields[0] == 0 || fields[0] > MAX_TIMEOUT_MS) {
                 return "timeout-ms must be between 1 and 3600000";
@@ -1065,7 +1067,7 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
         uint64_t matched, ram_dropped;
         mac128k_mouse_witness_memory_stats(mac, &matched, &ram_dropped);
         length = (size_t)snprintf(buffer, capacity,
-            "BHMACMOUSE3 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n"
+            "BHMACMOUSE3 %" PRIu64 " %" PRIu64 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n"
             "seq cycle kind pc address reg value x_phase y_phase pressed scc_pending scc_latched scc_dcd via_ifr via_ier irq_level source dx dy pending due deadline ram_offset width captured_offset captured_width captured_value\n",
             request->mouse_witness_first, request->mouse_witness_last, stop, count, dropped,
             dropped == 0, stop >= request->mouse_witness_last, mouse->edge_cycles, mouse->guard_cycles,
@@ -1073,13 +1075,13 @@ static bool write_mouse_witness(const mac128k *mac, const struct request *reques
             matched, ram_dropped);
     } else if (request->mouse_witness_detail) {
         length = (size_t)snprintf(buffer, capacity,
-            "BHMACMOUSE2 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u\n"
+            "BHMACMOUSE2 %" PRIu64 " %" PRIu64 " %" PRIu64 " %zu %" PRIu64 " %u %u %" PRIu32 " %" PRIu32 " %u\n"
             "seq cycle kind pc address reg value x_phase y_phase pressed scc_pending scc_latched scc_dcd via_ifr via_ier irq_level source dx dy pending due deadline\n",
             request->mouse_witness_first, request->mouse_witness_last, stop, count, dropped,
             dropped == 0, stop >= request->mouse_witness_last,
             mouse->edge_cycles, mouse->guard_cycles, (unsigned)mouse->invert);
     } else length = (size_t)snprintf(buffer, capacity,
-                                    "BHMACMOUSE1 %" PRIu32 " %" PRIu32 " %" PRIu64 " %zu %" PRIu64 "\n%s",
+                                    "BHMACMOUSE1 %" PRIu64 " %" PRIu64 " %" PRIu64 " %zu %" PRIu64 "\n%s",
                                     request->mouse_witness_first, request->mouse_witness_last,
                                     stop, count, dropped, fields);
     for (size_t index = 0; index < count && length < capacity; ++index) {
@@ -2453,7 +2455,7 @@ int wmain(int argc, wchar_t **argv)
              "         --fail-hard-disk-reset-at OCCURRENCE (built-in firmware)\n"
              "PC trace: --pc-witness PATH --pc-witness-memory ADDRESS:LENGTH\n"
              "  --pc-witness-io PORT:LENGTH --pc-witness-cycles FIRST:LAST\n"
-             "Limits: cycles 1..4000000000, timeout-ms 1..3600000, 1024 input events,\n"
+             "Limits: cycles 1..20000000000, timeout-ms 1..3600000, 1024 input events,\n"
              "  16 inspect ranges, 4096 bytes per range, 16384 bytes total.\n"
              "Exit 0 completed, 1 timeout/cancel/fault or unmet condition, 2 invalid request/output.\n"
              "Only --live opens a visible window. See README.md for formats and timing.");

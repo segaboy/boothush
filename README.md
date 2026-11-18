@@ -69,7 +69,9 @@ Run `boothush.exe` directly from an existing terminal. When a controller launche
 & "$build\boothush.exe" --machine pc286 --floppy $installer --hard-disk $blankDisk --disk-out $newDisk --cycles 4000000 --timeout-ms 10000
 ```
 
-Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC accepts a system ROM with optional media, or uses built-in firmware to boot supplied media with floppy first. Both `--cycles` (1–4,000,000,000 emulated CPU cycles) and `--timeout-ms` (1–3,600,000 wall milliseconds for guest execution) are required. Cycle counts can cross the cap by the cost of one CPU step. Image loading and requested capture occur outside the guest execution timer. A process supervisor can also impose an end-to-end timeout. `--help` lists options and `--version` reports build date and time. Use `Get-FileHash` on the executable to identify exact binary bytes.
+Select one `--machine`. Macintosh requires a ROM and accepts a floppy. The PC accepts a system ROM with optional media, or uses built-in firmware to boot supplied media with floppy first. Both `--cycles` (1-20,000,000,000 emulated CPU cycles) and `--timeout-ms` (1-3,600,000 wall milliseconds for guest execution) are required. Cycle counts can cross the cap by the cost of one CPU step. Image loading and requested capture occur outside the guest execution timer. A process supervisor can also impose an end-to-end timeout. `--help` lists options and `--version` reports build date and time. Use `Get-FileHash` on the executable to identify exact binary bytes.
+
+The larger run budget applies to native `mac128k` and `pc286` only; NES retains its instruction-step interface. Scheduled input offsets and `--until-pc-after` still use unsigned 32-bit values. Explicit witness ranges, capture cycles and video start retain their existing limits. Default mouse and PC witness ends follow the full run budget; default keyboard and display witness ends remain 4,000,000,000. See the [long-cycle qualification](docs/long-cycle-budgets-20261118.md) for the exact build and demonstrated scope.
 
 | Option | Behavior |
 | --- | --- |

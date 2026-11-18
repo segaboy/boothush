@@ -10,6 +10,8 @@ BootHush is a Windows command-line test runner. The local checkout contains the 
 
 Normal runs are headless and return one JSON result. When launching from Python with redirected output, use `creationflags=subprocess.CREATE_NO_WINDOW` to keep the console hidden. `--window-mouse` uses an invisible owned window with injected messages. `--live` opens a visible window for an explicitly selected interactive session. Neither requires control of unrelated Windows applications.
 
+Native Mac/286 `--cycles` now admits an explicit budget up to 20,000,000,000 with the existing required wall timeout. The [2026-11-18 long-cycle qualification](long-cycle-budgets-20261118.md) identifies the new active-profile executable, parsing and regression checks, and original instruction loops crossing the 32-bit clock. Input/capture/explicit witness limits are unchanged. Earlier integration receipts keep their original executable identities; select and qualify this newer binary explicitly for a longer workload.
+
 The owner's 2026-11-16 human-testing requirement is implemented for Mac mouse/keyboard and 286 keyboard/EGA. [Human testing](human-testing.md) describes the launcher, key log, capture workflow, and held-key/focus behavior. Hidden native-window fixtures exercise the input and rendering path; these are automated checks and do not qualify the paired release. Keep the exact emulator and guest hashes, completed human observations, and unresolved defects with the qualification record. The earlier paired review package remains unchanged.
 
 The first actual Mac human round found pointer lag and incomplete boundary
