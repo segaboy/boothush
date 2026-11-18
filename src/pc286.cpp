@@ -147,6 +147,7 @@ struct pc286 final : boothush_i286::Bus {
     bool post_written = false;
     uint8_t post = 0;
     bool built_in_firmware = false;
+    bool floppy_writes_enabled = false;
     bool read_failure_enabled = false;
     uint8_t read_failure_cylinder = 0, read_failure_head = 0, read_failure_sector = 0;
     uint64_t read_failures = 0;
@@ -472,7 +473,7 @@ struct pc286 final : boothush_i286::Bus {
         case 0x02:
         case 0x03:
         case 0x04:
-            if (operation == 0x03 && !hard) {
+            if (operation == 0x03 && !hard && !floppy_writes_enabled) {
                 disk_status(regs, false, 3); // Floppy is write protected.
             } else {
                 disk_transfer(regs, hard, operation);
@@ -826,6 +827,18 @@ pc286 *pc286_create(const uint8_t *rom, size_t size)
 pc286 *pc286_create_floppy(const uint8_t *image, size_t size)
 {
     return pc286_create_system(nullptr, 0, image, size, nullptr, 0);
+}
+
+bool pc286_enable_floppy_writes(pc286 *machine)
+{
+    if (!machine || !machine->built_in_firmware || !machine->floppy) return false;
+    machine->floppy_writes_enabled = true;
+    return true;
+}
+
+const uint8_t *pc286_floppy(const pc286 *machine)
+{
+    return machine ? machine->floppy.get() : nullptr;
 }
 
 bool pc286_fail_floppy_read(pc286 *machine, unsigned cylinder, unsigned head, unsigned sector)

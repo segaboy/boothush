@@ -29,10 +29,10 @@ An independent x64 boot-services state model tests page allocation and stale mem
 
 | Profile | Supported test path |
 | --- | --- |
-| `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA/SCC mouse and keyboard input, serial RTC/PRAM, and read-only single-sided 400 KiB IWM floppy media. Verified with ClasSICK replacement ROMs and an original 68000 floppy boot fixture. |
-| `pc286` | 6 MHz Intel 80286 and 640 KiB conventional RAM, targeting the IBM PC/AT 5170 with 640 × 350 planar EGA, a read-only 1.2 MB floppy, and a 20 MB hard disk. Includes keyboard input, PIC/PIT/RTC, floppy DMA, fixed-disk PIO, and POST capture. Verified with original test ROMs and boot media. |
+| `mac128k` | Motorola 68000, 128 KiB RAM, 64 KiB ROM, Macintosh reset overlay, 512 × 342 monochrome framebuffer, VIA/SCC mouse and keyboard input, serial RTC/PRAM, and single-sided 400 KiB IWM floppy media, protected by default with opt-in private sector writes. Verified with ClasSICK replacement ROMs and an original 68000 floppy boot fixture. |
+| `pc286` | 6 MHz Intel 80286 and 640 KiB conventional RAM, targeting the IBM PC/AT 5170 with 640 × 350 planar EGA, a 1.2 MB floppy protected by default with opt-in built-in BIOS writes, and a 20 MB hard disk. Includes keyboard input, PIC/PIT/RTC, floppy DMA reads, fixed-disk PIO, and POST capture. Verified with original test ROMs and boot media. |
 
-Macintosh System 1 and factory IBM BIOS compatibility require separate verification with the intended ROMs and media. Macintosh floppy writes, serial communications and sound remain open. See the [PC/AT boot profile](docs/pc-at.md) and [EGA profile](docs/ega.md) for device behavior and limits. Keep proprietary ROMs and test media outside the public repository.
+Macintosh System 1 and factory IBM BIOS compatibility require separate verification with the intended ROMs and media. Macintosh flux-level writes, serial communications and sound remain open. See the [PC/AT boot profile](docs/pc-at.md) and [EGA profile](docs/ega.md) for device behavior and limits. Keep proprietary ROMs and test media outside the public repository.
 
 ## Build and test
 
@@ -77,6 +77,7 @@ The larger run budget applies to native `mac128k` and `pc286` only; NES retains 
 | --- | --- |
 | `--rom PATH` | Read a 65,536-byte system ROM. PC mode maps it at the low and high BIOS ranges used during reset. |
 | `--floppy PATH` | Mount read-only media. Macintosh accepts a raw 409,600-byte image or 400 KiB Disk Copy 4.2. PC accepts a raw 1,228,800-byte image. PC built-in firmware checks the boot signature and loads the selected sector at `0000:7C00`. |
+| `--floppy-out NEW_PATH` | Explicitly enable private-copy floppy writes and create a snapshot only after successful execution and requested observations. The source is never edited and an existing destination is refused before execution. Mac preserves the raw/DC42 container, metadata and representable tags; PC supports built-in INT 13h writes only. See the [write qualification](docs/floppy-writes-20261118.md). |
 | `--mac-floppy-state 1` | Mac only. Add a side-effect-free stopped IWM snapshot and activity counters to JSON, labeled `modeled_iwm`. Includes no disk bytes or boot-success claim; see [floppy observations](docs/mac-floppy.md#stopped-drive-observations). |
 | `--mac-floppy-bad-checksum TRACK:SECTOR` | Mac with floppy only. Inject a persistent synthetic GCR data-checksum error for one zero-based track/sector, preserving the source image. Reports the selection and altered returned nibbles; see [checksum failures](docs/mac-floppy.md#synthetic-sector-checksum-failures). |
 | `--fail-floppy-read C:H:S` | PC built-in firmware test only: fail each valid floppy INT 13h read starting at the specified cylinder, head and sector. Requires `--floppy`, and cannot be used with `--rom`. Reports the selection and injection count in JSON. See [PC/AT](docs/pc-at.md). |

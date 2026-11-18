@@ -3,7 +3,9 @@
 BootHush models one 6 MHz 80286, 640 KiB of conventional RAM, an enhanced-color
 EGA adapter, one 1.2 MB diskette drive and one IBM type 2 fixed disk. The fixed
 disk has 615 cylinders, four heads and 17 sectors per track. The diskette is
-read-only. Fixed disk writes change the run's private copy. Save that copy with
+read-only by default. `--floppy-out NEW_PATH` enables built-in BIOS sector
+writes to a private copy and exports it only after a successful run. Direct
+floppy-controller writes remain unsupported. Fixed disk writes change the run's private copy. Save that copy with
 `--disk-out` to carry an installation into a second run.
 
 A supplied system ROM runs from the 80286 reset vector. It can call an optional
@@ -22,7 +24,7 @@ The generated tests exercise reset, protected mode, POST markers, EGA option
 ROM mapping, floppy DMA and IRQ6, hard-disk PIO, and a floppy-to-hard-disk
 installation followed by a disk-only boot. A separate opt-in test runs the
 official FreeDOS 1.4 boot floppy with the built-in firmware. Factory IBM BIOS
-POST remains unverified. Analog disk timing, floppy writes, battery-backed
+POST remains unverified. Analog disk timing, floppy-controller writes, battery-backed
 CMOS persistence, additional drives and expansion hardware are outside this
 profile.
 
@@ -32,7 +34,7 @@ These calls are the BootHush built-in firmware shim, not a claim of full IBM BIO
 
 | Interrupt | Implemented built-in calls |
 | --- | --- |
-| `INT 13h` | `AH=00` reset, `01` last status, `02` read, `03` write, `04` verify address/range, `08` geometry, `15` drive type. Only `DL=00h` and `80h` are recognized when the corresponding media exists. Floppy writes return status `03h` and do not alter media. Format (`05`) and unsupported calls return an error. |
+| `INT 13h` | `AH=00` reset, `01` last status, `02` read, `03` write, `04` verify address/range, `08` geometry, `15` drive type. Only `DL=00h` and `80h` are recognized when the corresponding media exists. Floppy writes return status `03h` unless private writes were explicitly enabled with `--floppy-out`. Enabled writes validate the entire request before changing the private copy. Format (`05`) and unsupported calls return an error. |
 | `INT 10h` | `AH=00` mode setting (modes `03h` and `10h`), `01` cursor shape, `02`/`03` cursor position, `06`/`07` text scroll, `08`/`09`/`0a` text character operations, `0e` teletype, `0f` query mode. Text operations are restricted to mode `03h`; invalid or unsupported requests report carry and `AH=86h`. |
 | `INT 11h`, `12h` | Equipment word and conventional-memory size from the BIOS data area. |
 | `INT 15h` | `AH=88h` reports zero extended memory; other functions return carry and `AH=86h`. |

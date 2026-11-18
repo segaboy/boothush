@@ -74,6 +74,12 @@ pc286 *pc286_create_floppy(const uint8_t *image, size_t size);
 pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size);
+/* Built-in firmware only: opt in to BIOS sector writes on the owned copy.
+ * Rejects NULL, absent floppy or external firmware; FDC writes are unchanged. */
+bool pc286_enable_floppy_writes(pc286 *machine);
+/* Borrowed owned image, PC286_FLOPPY_SIZE bytes, valid until destruction.
+ * NULL for NULL machine or absent floppy. Input media is never modified. */
+const uint8_t *pc286_floppy(const pc286 *machine);
 bool pc286_load_ega_rom(pc286 *machine, const uint8_t *rom, size_t size);
 bool pc286_set_ega_font(pc286 *machine, const uint8_t *font, size_t size);
 /* Built-in firmware only: fail every valid floppy read beginning at this CHS. */

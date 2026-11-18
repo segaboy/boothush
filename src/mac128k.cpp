@@ -705,7 +705,7 @@ void mac128k_destroy(mac128k *machine)
 
 bool mac128k_insert_floppy(mac128k *machine, const uint8_t *image, size_t size)
 {
-    if (image == nullptr) {
+    if (machine == nullptr || image == nullptr) {
         return false;
     }
     try {
@@ -713,6 +713,28 @@ bool mac128k_insert_floppy(mac128k *machine, const uint8_t *image, size_t size)
     } catch (const std::bad_alloc &) {
         return false;
     }
+}
+
+bool mac128k_enable_floppy_writes(mac128k *machine)
+{
+    return machine && machine->iwm.enable_writes();
+}
+
+const uint8_t *mac128k_export_floppy(mac128k *machine, size_t *size)
+{
+    if (!machine || !size) return nullptr;
+    const auto image = machine->iwm.export_image();
+    *size = image.size();
+    return image.empty() ? nullptr : image.data();
+}
+
+bool mac128k_read_floppy_write_state(const mac128k *machine, mac128k_floppy_write_state *state)
+{
+    if (!machine || !state) return false;
+    const auto write = machine->iwm.write_state();
+    *state = {write.enabled, write.error, write.gate_open, write.pending_bytes, write.accepted_bytes,
+              write.committed_sectors, write.rejected_records};
+    return true;
 }
 
 void mac128k_run(mac128k *machine, uint32_t cycles)

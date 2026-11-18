@@ -86,6 +86,7 @@ struct request {
     enum machine_kind machine;
     const wchar_t *rom_path;
     const wchar_t *floppy_path;
+    const wchar_t *floppy_out_path;
     const wchar_t *disk_path;
     const wchar_t *disk_out_path;
     const wchar_t *ega_rom_path;
@@ -466,6 +467,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             request->rom_path = value;
         } else if (wcscmp(option, L"--floppy") == 0 && request->floppy_path == NULL) {
             request->floppy_path = value;
+        } else if (wcscmp(option, L"--floppy-out") == 0 && request->floppy_out_path == NULL) {
+            request->floppy_out_path = value;
         } else if (wcscmp(option, L"--fail-floppy-read") == 0 && !request->fail_floppy_read_set) {
             if (!parse_fields(value, fields, 3) || fields[0] >= 80 || fields[1] >= 2 || fields[2] < 1 || fields[2] > 15)
                 return "fail-floppy-read requires cylinder:head:sector within 80:2:15 geometry";
@@ -720,6 +723,16 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
     if(request->mac_cpu_state && request->machine!=MACHINE_MAC128K) return "mac-cpu-state requires mac128k";
     if(request->mac_floppy_state && request->machine!=MACHINE_MAC128K) return "mac-floppy-state requires mac128k";
+    if(request->floppy_out_path && !request->floppy_path) return "floppy-out requires a floppy";
+    if(request->floppy_out_path && request->machine==MACHINE_PC286 && request->rom_path)
+        return "floppy-out on pc286 requires built-in firmware";
+    if(request->floppy_out_path) {
+        if(GetFileAttributesW(request->floppy_out_path)!=INVALID_FILE_ATTRIBUTES)
+            return "floppy-out requires a new path; existing files and input images are never replaced";
+        const DWORD error=GetLastError();
+        if(error!=ERROR_FILE_NOT_FOUND && error!=ERROR_PATH_NOT_FOUND)
+            return "cannot access requested floppy output path";
+    }
     if(request->mac_floppy_bad_checksum_set && (request->machine!=MACHINE_MAC128K || !request->floppy_path))
         return "mac-floppy-bad-checksum requires mac128k and floppy";
     if(request->series.path && request->machine!=MACHINE_MAC128K) return "capture-series is supported on mac128k and nes";
@@ -1323,12 +1336,21 @@ static void print_result(const char *status, enum machine_kind machine,
                          const struct frame_series *series,const struct keyboard_summary *keyboard,
                          const struct display_summary *display,const struct keyboard_fault_result *fault,
                          const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy,
-                         const mac128k_floppy_checksum_fault *floppy_fault)
+                         const mac128k_floppy_checksum_fault *floppy_fault,
+                         const mac128k_floppy_write_state *floppy_write)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
     if (machine == MACHINE_MAC128K) {
         printf(",\"machine\":\"mac128k\",\"vbl\":%" PRIu64, state.vbl);
+        if(floppy_write) {
+            printf(",\"mac_floppy_write\":{\"enabled\":%s,\"error\":%s,\"gate_open\":%s,"
+                   "\"pending_bytes\":%" PRIu32 ",\"accepted_bytes\":%" PRIu64 ","
+                   "\"committed_sectors\":%" PRIu64 ",\"rejected_records\":%" PRIu64 "}",
+                   floppy_write->enabled?"true":"false",floppy_write->error?"true":"false",
+                   floppy_write->gate_open?"true":"false",floppy_write->pending_bytes,
+                   floppy_write->accepted_bytes,floppy_write->committed_sectors,floppy_write->rejected_records);
+        }
         if (floppy_fault) {
             printf(",\"mac_floppy_checksum_fault\":{\"kind\":\"synthetic_gcr_data_checksum\","
                    "\"mode\":\"persistent\",\"track\":%u,\"sector\":%u,\"altered_nibbles\":%" PRIu64 "}",
@@ -1482,7 +1504,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -1874,9 +1896,13 @@ static const char *create_machine(struct machine *machine, const struct request 
                 !mac128k_insert_floppy(machine->mac, floppy.bytes, floppy.size)) {
                 error = "invalid Macintosh floppy image or could not insert it";
             }
+            if (error == NULL && machine->mac && request->floppy_out_path &&
+                !mac128k_enable_floppy_writes(machine->mac)) error = "cannot enable private Macintosh floppy writes";
         } else {
             machine->pc = pc286_create_system(rom.bytes, rom.size, floppy.bytes, floppy.size,
                                               disk.bytes, disk.size);
+            if (machine->pc && request->floppy_out_path && !pc286_enable_floppy_writes(machine->pc))
+                error = "cannot enable private PC floppy writes";
             if (machine->pc != NULL && ega_rom.bytes != NULL &&
                 !pc286_load_ega_rom(machine->pc, ega_rom.bytes, ega_rom.size)) {
                 error = "invalid EGA option ROM";
@@ -2421,6 +2447,7 @@ int wmain(int argc, wchar_t **argv)
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
+             "  --floppy-out NEW_PATH enables private floppy writes and snapshots only a successful run.\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
@@ -2643,6 +2670,14 @@ int wmain(int argc, wchar_t **argv)
         request.series.written=write_new_file(request.series.path,"",0,request.series.data,(DWORD)request.series.used);
         if(!request.series.written) result=(struct run_result){"error","cannot create or write frame series",2};
     }
+    // Export last: a failed run or any failed requested observation leaves no snapshot.
+    if(request.floppy_out_path && result.exit_code==0) {
+        size_t size=PC286_FLOPPY_SIZE;
+        const uint8_t *image=machine.mac?mac128k_export_floppy(machine.mac,&size):pc286_floppy(machine.pc);
+        if(!image) result=(struct run_result){"error","floppy snapshot refused after incomplete or invalid write",2};
+        else if(size>MAXDWORD || !write_new_file(request.floppy_out_path,NULL,0,image,(DWORD)size))
+            result=(struct run_result){"error","cannot create or write requested floppy snapshot",2};
+    }
     mac128k_cpu_state cpu={0};
     const bool cpu_observed=request.mac_cpu_state && mac128k_read_cpu_state(machine.mac,&cpu);
     mac128k_floppy_state floppy={0};
@@ -2650,10 +2685,14 @@ int wmain(int argc, wchar_t **argv)
     mac128k_floppy_checksum_fault floppy_fault={0};
     const bool floppy_fault_observed=request.mac_floppy_bad_checksum_set &&
         mac128k_read_floppy_checksum_fault(machine.mac,&floppy_fault) && floppy_fault.enabled;
+    mac128k_floppy_write_state floppy_write={0};
+    const bool floppy_write_observed=request.floppy_out_path && machine.mac &&
+        mac128k_read_floppy_write_state(machine.mac,&floppy_write);
     print_result(result.status, request.machine, state, result.error, inspection_bytes, request.inspect, request.inspect_count,
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
                  request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL,
-                 cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL,floppy_fault_observed?&floppy_fault:NULL);
+                 cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL,floppy_fault_observed?&floppy_fault:NULL,
+                 floppy_write_observed?&floppy_write:NULL);
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

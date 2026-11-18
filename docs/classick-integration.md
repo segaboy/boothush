@@ -12,6 +12,14 @@ Normal runs are headless and return one JSON result. When launching from Python 
 
 Native Mac/286 `--cycles` now admits an explicit budget up to 20,000,000,000 with the existing required wall timeout. The [2026-11-18 long-cycle qualification](long-cycle-budgets-20261118.md) identifies the new active-profile executable, parsing and regression checks, and original instruction loops crossing the 32-bit clock. Input/capture/explicit witness limits are unchanged. Earlier integration receipts keep their original executable identities; select and qualify this newer binary explicitly for a longer workload.
 
+`--floppy-out NEW_PATH` opts into private-copy floppy writes and exports only
+after a successful bounded run and its requested observations. The source and
+existing destination files are protected. The [floppy write qualification](floppy-writes-20261118.md)
+defines the Mac GCR-record handshake, DC42/tag preservation, native286 built-in
+INT 13h write scope, original roundtrips and failure controls. This enables
+provider development; it does not qualify filesystem operations or System Disk
+startup by itself.
+
 The owner's 2026-11-16 human-testing requirement is implemented for Mac mouse/keyboard and 286 keyboard/EGA. [Human testing](human-testing.md) describes the launcher, key log, capture workflow, and held-key/focus behavior. Hidden native-window fixtures exercise the input and rendering path; these are automated checks and do not qualify the paired release. Keep the exact emulator and guest hashes, completed human observations, and unresolved defects with the qualification record. The earlier paired review package remains unchanged.
 
 The first actual Mac human round found pointer lag and incomplete boundary

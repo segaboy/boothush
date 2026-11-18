@@ -1,18 +1,25 @@
 # Macintosh 128K floppy
 
-The internal single-sided Sony drive accepts read-only 400 KiB raw sector
+The internal single-sided Sony drive accepts 400 KiB raw sector
 images and 400 KiB Disk Copy 4.2 images with or without the 12-byte sector
 tags. Disk Copy headers, lengths and checksums are validated before insertion.
-Raw images supply zero tags. Mounting never edits the source file.
+Raw images supply zero tags. Media is read-only by default. Mounting never
+edits the source file; `--floppy-out NEW_PATH` opts into private-copy writes.
 
 The guest controls the drive through IWM soft switches and VIA PA5. The
 controller provides drive sensing, track seeking, motor and eject commands,
 and a rotating GCR data stream with 80 tracks in five speed zones. The model
 delivers already synchronized nibbles at CPU-cycle boundaries and simulates
 nominal zone speeds. Magnetic flux, PWM speed control, analog seek and spin-up
-delays, IWM bit-level modes and disk writes are outside this profile.
+delays, IWM bit-level modes and arbitrary write-track/format operations are
+outside this profile.
 
-Writable media remains open work. The current insertion path converts the validated source into private encoded GCR tracks and discards the sector-image representation. A complete write path needs bounded write-gate and nibble handling, GCR sector and tag decoding with integrity checks, and explicit raw/DC42 serialization with recalculated checksums. Until these pieces exist there is no modified-media output or guest write persistence. The source image remains unchanged.
+The opt-in writer retains a private source-container copy and accepts complete,
+validated GCR data records through the existing soft switches. It updates the
+logical sector and encoded readback together, then exports the original format
+with recalculated DC42 checksums. This is a bounded synchronized sector-record
+model, not physical write-gate or magnetic-flux fidelity. See
+[private-copy write qualification](floppy-writes-20261118.md).
 
 The tests generate an original 68000 ROM and floppy payloads. The ROM reads a
 sector through the IWM, decodes its data and tags, verifies the rolling GCR
@@ -41,7 +48,7 @@ This command makes an observation; reaching its cycle limit is not a boot pass.
 
 | Fields | Meaning |
 | --- | --- |
-| `media_present`, `write_protected` | Internal drive media state. All inserted media is protected; both are false after eject or with no disk. |
+| `media_present`, `write_protected` | Internal drive media state. Inserted media is protected unless private writes were explicitly enabled; both are false after eject or with no disk. |
 | `motor_on`, `disk_changed`, `step_outward`, `track` | Internal drive state; track is 0-79. These remain internal-drive fields when the external drive is selected. |
 | `external_selected`, `controller_enabled` | Raw external-drive selection and effective enable at stop, including the modeled delayed disable. No external drive is present. |
 | `select_line`, `control`, `mode` | VIA PA5 pin level, IWM soft-switch bit field and mode byte. |
@@ -49,7 +56,7 @@ This command makes an observation; reaching its cycle limit is not a boot pass.
 | `nibbles_delivered` | Encoded track bytes returned by ready data reads, including sync/gap bytes. This is not a decoded sector count. |
 | `disabled_data_reads` | Data-mode reads while the controller is disabled, which return `ff`. These are not delivered media bytes. |
 | `not_ready_data_reads` | Enabled data-mode reads returning zero: absent/external drive, motor off, no media, or a second read in the same nibble slot. |
-| `ignored_data_writes` | Writes to an odd IWM register with Q6 and Q7 high while enabled. Counted even with no media or external selection; no media is modified. Mode writes while disabled are excluded. |
+| `ignored_data_writes` | Rejected writes to an odd IWM register with Q6 and Q7 high while enabled. All such writes are ignored by default; an opt-in writable copy accepts ready strobes. Mode writes while disabled are excluded. |
 | `eject_commands` | Internal-drive eject commands, including commands with no disk present. |
 
 The six counters are unsigned 64-bit totals from machine creation; reads of

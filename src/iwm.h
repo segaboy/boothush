@@ -2,6 +2,7 @@
 #define BOOTHUSH_IWM_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -22,8 +23,17 @@ public:
         uint8_t track = 0, sector = 0;
         uint64_t altered_nibbles = 0;
     };
+    struct WriteState {
+        bool enabled, error, gate_open;
+        uint32_t pending_bytes;
+        uint64_t accepted_bytes, committed_sectors, rejected_records;
+    };
 
     bool insert(std::span<const uint8_t> image);
+    bool enable_writes();
+    // Borrowed snapshot in the original container format; empty on any write error.
+    std::span<const uint8_t> export_image();
+    WriteState write_state() const;
     uint8_t read(unsigned reg, bool select, uint64_t cycle);
     void write(unsigned reg, bool select, uint64_t cycle, uint8_t value);
     // Copies modeled state only; never touches soft switches or the data latch.
@@ -36,6 +46,17 @@ private:
     static constexpr unsigned track_count = 80;
     std::array<std::vector<uint8_t>, track_count> tracks_{};
     std::array<std::array<uint32_t, 12>, track_count> checksum_offsets_{};
+    std::vector<uint8_t> image_;
+    bool writable_ = false;
+    std::size_t data_start_ = 0, tag_start_ = 0;
+    bool tagged_ = false;
+    // One complete synchronized GCR data record, including prologue/epilogue.
+    std::array<uint8_t, 709> write_record_{};
+    std::size_t write_used_ = 0;
+    unsigned write_track_ = 0;
+    bool write_error_ = false;
+    uint64_t next_write_cycle_ = 0, session_bytes_ = 0, session_records_ = 0;
+    uint64_t accepted_bytes_ = 0, committed_sectors_ = 0, rejected_records_ = 0;
     ChecksumFault checksum_fault_{};
     uint8_t bad_checksum_nibble_ = 0;
     uint8_t control_ = 0;
@@ -58,6 +79,11 @@ private:
     void drive_command(unsigned command, uint64_t cycle);
     bool drive_sense(bool select, uint64_t cycle) const;
     uint8_t read_data(uint64_t cycle);
+    bool write_ready(uint64_t cycle) const;
+    void reject_write();
+    void finish_write();
+    void write_data(uint64_t cycle, uint8_t value);
+    bool commit_record();
 };
 
 } // namespace boothush

@@ -71,6 +71,16 @@ void mac128k_destroy(mac128k *machine);
 
 /* Inserts a read-only raw or Disk Copy 4.2 Macintosh 400 KiB floppy. */
 bool mac128k_insert_floppy(mac128k *machine, const uint8_t *image, size_t size);
+/* Explicit private-copy writes; insertion remains read-only by default. */
+bool mac128k_enable_floppy_writes(mac128k *machine);
+/* Borrowed original-format snapshot, refused after any incomplete/invalid write. */
+const uint8_t *mac128k_export_floppy(mac128k *machine, size_t *size);
+typedef struct {
+    bool enabled, error, gate_open;
+    uint32_t pending_bytes;
+    uint64_t accepted_bytes, committed_sectors, rejected_records;
+} mac128k_floppy_write_state;
+bool mac128k_read_floppy_write_state(const mac128k *machine, mac128k_floppy_write_state *state);
 
 /* Executes whole instructions up to the requested slice or the first machine fault. */
 void mac128k_run(mac128k *machine, uint32_t cycles);

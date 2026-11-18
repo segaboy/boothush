@@ -184,13 +184,157 @@ bool Iwm::insert(std::span<const uint8_t> image)
         tracks[cylinder] = encode_track(payload, cylinder, sector, checksums[cylinder]);
         sector += 12 - cylinder / tracks_per_zone;
     }
+    std::vector<uint8_t> original(image.begin(), image.end());
     tracks_ = std::move(tracks);
+    image_ = std::move(original);
+    data_start_ = image.size() == MAC128K_FLOPPY_SIZE ? 0 : dc42_header_bytes;
+    tag_start_ = data_start_ + MAC128K_FLOPPY_SIZE;
+    tagged_ = image.size() > tag_start_;
+    writable_ = write_error_ = false;
+    write_used_ = 0;
+    session_bytes_ = session_records_ = 0;
+    accepted_bytes_ = committed_sectors_ = rejected_records_ = 0;
     checksum_offsets_ = checksums;
     checksum_fault_ = {};
     inserted_ = true;
     disk_changed_ = true;
     last_slot_ = UINT64_MAX;
     return true;
+}
+
+bool Iwm::enable_writes()
+{
+    if (!inserted_) return false;
+    writable_ = true;
+    return true;
+}
+
+Iwm::WriteState Iwm::write_state() const
+{
+    return {writable_, write_error_ || rejected_records_ != 0, (control_ & q7) != 0,
+            static_cast<uint32_t>(write_used_), accepted_bytes_, committed_sectors_, rejected_records_};
+}
+
+std::span<const uint8_t> Iwm::export_image()
+{
+    if (!writable_ || image_.empty() || rejected_records_ || write_used_ ||
+        ((control_ & q7) && session_bytes_)) return {};
+    if (data_start_) {
+        const auto bytes = std::span<const uint8_t>(image_);
+        const uint32_t data_sum = dc42_checksum(bytes.subspan(data_start_, MAC128K_FLOPPY_SIZE));
+        const uint32_t tag_sum = tagged_ ? dc42_checksum(bytes.subspan(tag_start_ + tag_bytes)) : 0;
+        for (unsigned i = 0; i < 4; ++i) {
+            image_[0x48 + i] = static_cast<uint8_t>(data_sum >> (24 - 8 * i));
+            image_[0x4c + i] = static_cast<uint8_t>(tag_sum >> (24 - 8 * i));
+        }
+    }
+    return image_;
+}
+
+bool Iwm::write_ready(uint64_t cycle) const
+{
+    return writable_ && !write_error_ && inserted_ && motor_on_ && internal_drive(cycle) &&
+           track_ == write_track_ && cycle >= next_write_cycle_;
+}
+
+void Iwm::reject_write()
+{
+    if (!write_error_) ++rejected_records_;
+    write_error_ = true;
+}
+
+void Iwm::finish_write()
+{
+    if (writable_ && (write_used_ || (session_bytes_ && !session_records_))) reject_write();
+    write_used_ = 0;
+}
+
+bool Iwm::commit_record()
+{
+    // Decode one complete record into a fixed private buffer before touching media.
+    // This is the inverse of the existing data-record encoding, not a flux writer.
+    auto symbol = [](uint8_t byte) -> int {
+        const auto found = std::find(gcr.begin(), gcr.end(), byte);
+        return found == gcr.end() ? -1 : static_cast<int>(found - gcr.begin());
+    };
+    const int sector = symbol(write_record_[3]);
+    if (sector < 0 || static_cast<unsigned>(sector) >= 12 - track_ / tracks_per_zone ||
+        write_record_[707] != 0xde || write_record_[708] != 0xaa) return false;
+    std::array<uint8_t, tag_bytes + sector_bytes> payload{};
+    size_t at = 4;
+    auto unpack = [&](uint8_t &a, uint8_t &b, uint8_t &c, bool last) {
+        const int high = symbol(write_record_[at++]);
+        const int low_a = symbol(write_record_[at++]);
+        const int low_b = symbol(write_record_[at++]);
+        const int low_c = last ? 0 : symbol(write_record_[at++]);
+        if (high < 0 || low_a < 0 || low_b < 0 || low_c < 0) return false;
+        a = static_cast<uint8_t>(((high & 0x30) << 2) | low_a);
+        b = static_cast<uint8_t>(((high & 0x0c) << 4) | low_b);
+        c = static_cast<uint8_t>(((high & 3) << 6) | low_c);
+        return true;
+    };
+    uint8_t check_a = 0, check_b = 0, check_c = 0;
+    for (size_t offset = 0; offset < payload.size(); offset += 3) {
+        const bool last = offset + 2 == payload.size();
+        uint8_t a, b, c;
+        if (!unpack(a, b, c, last)) return false;
+        const uint8_t rotated = std::rotl(check_c, 1);
+        a ^= rotated;
+        const unsigned sum_a = unsigned{check_a} + a + (rotated & 1);
+        check_a = static_cast<uint8_t>(sum_a);
+        b ^= check_a;
+        const unsigned sum_b = unsigned{check_b} + b + (sum_a >> 8);
+        check_b = static_cast<uint8_t>(sum_b);
+        payload[offset] = a;
+        payload[offset + 1] = b;
+        if (last) {
+            if (c != (check_b & 0xc0)) return false;
+            check_c = rotated;
+        } else {
+            c ^= check_b;
+            check_c = static_cast<uint8_t>(rotated + c + (sum_b >> 8));
+            payload[offset + 2] = c;
+        }
+    }
+    uint8_t a, b, c;
+    if (!unpack(a, b, c, false) || a != check_a || b != check_b || c != check_c) return false;
+    // An untagged source cannot represent nonzero tags in a same-format snapshot.
+    if (!tagged_ && std::any_of(payload.begin(), payload.begin() + tag_bytes,
+                              [](uint8_t byte) { return byte != 0; })) return false;
+    unsigned logical = static_cast<unsigned>(sector);
+    for (unsigned track = 0; track < track_; ++track) logical += 12 - track / tracks_per_zone;
+    std::copy(payload.begin() + tag_bytes, payload.end(), image_.begin() + data_start_ + logical * sector_bytes);
+    if (tagged_) std::copy_n(payload.begin(), tag_bytes, image_.begin() + tag_start_ + logical * tag_bytes);
+    const auto checksum = checksum_offsets_[track_][sector];
+    std::copy(write_record_.begin(), write_record_.end(), tracks_[track_].begin() + checksum - 704);
+    if (checksum_fault_.enabled && checksum_fault_.track == track_ && checksum_fault_.sector == sector)
+        bad_checksum_nibble_ = gcr[static_cast<unsigned>(symbol(write_record_[704])) ^ 1];
+    ++committed_sectors_;
+    ++session_records_;
+    return true;
+}
+
+void Iwm::write_data(uint64_t cycle, uint8_t value)
+{
+    if (!write_ready(cycle)) {
+        ++ignored_data_writes_;
+        reject_write();
+        return;
+    }
+    ++accepted_bytes_;
+    ++session_bytes_;
+    next_write_cycle_ = cycle + cycles_per_nibble;
+    if (write_used_ < 3) {
+        constexpr std::array<uint8_t, 3> prologue{0xd5, 0xaa, 0xad};
+        if (value == prologue[write_used_]) write_record_[write_used_++] = value;
+        else { write_used_ = value == prologue[0] ? 1 : 0; write_record_[0] = value; }
+        return;
+    }
+    write_record_[write_used_++] = value;
+    if (write_used_ == write_record_.size()) {
+        if (!commit_record()) reject_write();
+        write_used_ = 0;
+    }
 }
 
 bool Iwm::inject_bad_checksum(unsigned track, unsigned sector)
@@ -213,7 +357,7 @@ bool Iwm::enabled(uint64_t cycle) const
 
 Iwm::State Iwm::state(uint64_t cycle) const
 {
-    return {inserted_, inserted_, (control_ & external_drive) != 0, enabled(cycle),
+    return {inserted_, inserted_ && !writable_, (control_ & external_drive) != 0, enabled(cycle),
             motor_on_, disk_changed_, outward_, static_cast<uint8_t>(track_), control_, mode_,
             step_commands_, nibbles_delivered_, disabled_data_reads_, not_ready_data_reads_,
             ignored_data_writes_, eject_commands_};
@@ -229,6 +373,16 @@ void Iwm::switch_line(unsigned reg, bool select, uint64_t cycle)
     const uint8_t mask = static_cast<uint8_t>(1u << (reg / 2));
     const uint8_t previous = control_;
     control_ = (reg & 1) != 0 ? control_ | mask : control_ & ~mask;
+
+    if (writable_ && !(previous & q7) && (control_ & q7)) {
+        write_used_ = 0;
+        write_track_ = track_;
+        write_error_ = false;
+        session_bytes_ = session_records_ = 0;
+        next_write_cycle_ = cycle;
+    } else if ((previous & q7) && !(control_ & q7)) {
+        finish_write();
+    }
 
     if ((control_ & drive_enable) != 0) {
         disable_at_ = 0;
@@ -284,7 +438,7 @@ bool Iwm::drive_sense(bool select, uint64_t cycle) const
     case 2: return !motor_on_;
     case 3: return disk_changed_;
     case 8: return !inserted_;
-    case 9: return !inserted_; // No-write-protection signal is low with a disk.
+    case 9: return !inserted_ || writable_; // High means writable, or no disk.
     case 10: return track_ != 0;
     case 11:
         return motor_on_ && inserted_ &&
@@ -328,7 +482,9 @@ uint8_t Iwm::read(unsigned reg, bool select, uint64_t cycle)
     case 0: return read_data(cycle);
     case q6:
         return (mode_ & 0x1f) | (enabled(cycle) ? 0x20 : 0) | (drive_sense(select, cycle) ? 0x80 : 0);
-    case q7: return 0xbf;
+    case q7:
+        if (!writable_) return 0xbf;
+        return static_cast<uint8_t>(0x3f | (write_error_ ? 0 : 0x40) | (write_ready(cycle) ? 0x80 : 0));
     default: return 0xff;
     }
 }
@@ -339,11 +495,13 @@ void Iwm::write(unsigned reg, bool select, uint64_t cycle, uint8_t value)
     if ((control_ & (q6 | q7)) == (q6 | q7) && (reg & 1) != 0) {
         if (!enabled(cycle)) {
             mode_ = value;
+        } else if (writable_) {
+            write_data(cycle, value);
         } else {
             ++ignored_data_writes_;
         }
     }
-    // Active write strobes never modify the read-only media.
+    // Default insertion remains protected; only explicitly enabled copies accept records.
 }
 
 } // namespace boothush
