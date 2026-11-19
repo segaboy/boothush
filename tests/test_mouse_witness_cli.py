@@ -276,8 +276,10 @@ class MacMouseWitnessCliTests(BootHushTestCase):
     def test_memory_witness_alias_partial_writes_and_no_side_effects(self):
         program = (
             struct.pack(">HHI", 0x33fc, 0xabcd, 0x600b02)  # Overlay RAM alias.
+            + struct.pack(">HHI", 0x33fc, 0xaf87, 0x660b02)  # Fourth high RAM window.
             + write_byte(0xEFFFFE, 0) + write_byte(0xEFE7FE, 0x10)
             + write_byte(0xb00, 0xaa)
+            + struct.pack(">HHI", 0x33fc, 0x6e90, 0x020b02)  # Second low RAM window.
             + struct.pack(">HHI", 0x33fc, 0x1234, 0xb02)
             + struct.pack(">HHHI", 0x23fc, 0x89ab, 0xcdef, 0xb04)
             + write_byte(0xb08, 0x55) + bytes.fromhex("60fe")
@@ -292,12 +294,14 @@ class MacMouseWitnessCliTests(BootHushTestCase):
         self.assertEqual(traced, plain)
         self.assertEqual(frame_a.read_bytes(), frame_b.read_bytes())
         meta, rows = self.read_memory_detail(witness)
-        self.assertEqual(meta[10:], [0xb03, 4, 4, 0])
+        self.assertEqual(meta[10:], [0xb03, 4, 6, 0])
         self.assertTrue(any(row["kind"] == "phase" for row in rows))
         writes = [r for r in rows if r["kind"] == "ram_write"]
         self.assertEqual([(r["address"], r["ram_offset"], r["width"], r["captured_offset"],
                            r["captured_width"], r["captured_value"]) for r in writes], [
                            (0x600b02, 0xb02, 2, 1, 1, 0xcd),
+                           (0x660b02, 0xb02, 2, 1, 1, 0x87),
+                           (0x020b02, 0xb02, 2, 1, 1, 0x90),
                            (0xb02, 0xb02, 2, 1, 1, 0x34),
                            (0xb04, 0xb04, 2, 0, 2, 0x89ab),
                            (0xb06, 0xb06, 2, 0, 1, 0xcd)])

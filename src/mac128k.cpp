@@ -16,6 +16,10 @@ namespace {
 // Macintosh 128K startup and display wiring: ClasSICK 0.97 SPEC-0018.
 constexpr uint32_t rom_base = 0x400000;
 constexpr uint32_t overlay_ram_base = 0x600000;
+constexpr uint32_t normal_ram_aperture = 0x400000;
+constexpr uint32_t overlay_ram_aperture = 0x80000;
+constexpr uint32_t ram_offset_mask = MAC128K_RAM_SIZE - 1;
+static_assert((MAC128K_RAM_SIZE & ram_offset_mask) == 0);
 constexpr uint32_t main_frame_base = 0x1a700;
 constexpr uint32_t alternate_frame_base = 0x12700;
 constexpr uint32_t iwm_base = 0xc00000;
@@ -329,9 +333,12 @@ struct mac128k {
 
     uint8_t *writable_memory(uint32_t address, size_t size)
     {
-        const uint32_t base = overlay() ? overlay_ram_base : 0;
-        if (contains(base, MAC128K_RAM_SIZE, address, size)) {
-            return ram.data() + (address - base);
+        const bool startup = overlay();
+        const uint32_t base = startup ? overlay_ram_base : 0;
+        const uint32_t offset = address & ram_offset_mask;
+        if (contains(base, startup ? overlay_ram_aperture : normal_ram_aperture, address, size) &&
+            size <= MAC128K_RAM_SIZE - offset) {
+            return ram.data() + offset;
         }
         return nullptr;
     }
@@ -535,6 +542,12 @@ struct mac128k {
 
     uint32_t read_bus(uint32_t address, size_t size, const char *operation)
     {
+        /* A 68000 longword beginning in the final word of a physical bank
+           has two word transfers with independently decoded addresses. */
+        if (size == 4 && (address & ram_offset_mask) == ram_offset_mask - 1 && writable_memory(address, 2)) {
+            const uint32_t high = read_bus(address, 2, "read16");
+            return (high << 16) | read_bus(address + 2, 2, "read16");
+        }
         if ((size == 1 || size == 2) && contains(iwm_base, iwm_size, address, size)) {
             const uint8_t value = iwm.read((address >> 9) & 15, floppy_select_high(), cpu.getClock());
             return size == 1 ? value : (uint32_t{value} << 8) | value;
@@ -569,6 +582,11 @@ struct mac128k {
 
     void write_bus(uint32_t address, size_t size, uint32_t value, const char *operation)
     {
+        if (size == 4 && (address & ram_offset_mask) == ram_offset_mask - 1 && writable_memory(address, 2)) {
+            write_bus(address, 2, value >> 16, "write16");
+            write_bus(address + 2, 2, value & 0xffff, "write16");
+            return;
+        }
         if ((size == 1 || size == 2) && contains(iwm_base, iwm_size, address, size)) {
             iwm.write((address >> 9) & 15, floppy_select_high(), cpu.getClock(), static_cast<uint8_t>(value));
             return;

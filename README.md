@@ -34,6 +34,11 @@ An independent x64 boot-services state model tests page allocation and stale mem
 
 Macintosh System 1 and factory IBM BIOS compatibility require separate verification with the intended ROMs and media. Macintosh flux-level writes, serial communications and sound remain open. See the [PC/AT boot profile](docs/pc-at.md) and [EGA profile](docs/ega.md) for device behavior and limits. Keep proprietary ROMs and test media outside the public repository.
 
+On the original `mac128k` profile, the guest can address its 128 KiB of RAM
+throughout the first four MiB after the startup overlay clears.
+See the [Macintosh RAM address map](docs/mac128k-ram.md) for overlay addresses,
+physical inspection offsets and executable qualification.
+
 ## Build and test
 
 Use CMake 3.21 or later with a Windows C11/C++20 toolchain. Install or select Python 3 for tests. The current Windows build was verified with LLVM-MinGW and Ninja. From the source checkout with the tools on PATH:

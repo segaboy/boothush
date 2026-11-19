@@ -56,6 +56,11 @@ Mac and PC guest runs require `--machine`, `--cycles`, and `--timeout-ms`. Each 
 
 ## Current Mac/286 direction
 
+On `mac128k`, after VIA overlay release a guest read at `$03FFF0` reads the
+same word as `$01FFF0`. To observe that word with `--inspect`, use physical
+offset `0x1fff0:2`. The [128K RAM qualification](mac128k-ram.md) gives the
+startup map, public hardware reference, executable hash and regression results.
+
 For ClasSICK's installer and boot-error screens, the original
 `scripts/make_diagnostic_font.py` helper supplies a reproducible font for
 `--ega-font`; see [EGA diagnostics](ega.md). Text captures otherwise remain
