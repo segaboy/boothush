@@ -32,6 +32,12 @@ profile.
 
 These calls are the BootHush built-in firmware shim, not a claim of full IBM BIOS compatibility. They apply when the PC uses built-in firmware; a supplied system ROM provides its own services. The shim boots a signed sector (`55 aa`) from a supplied floppy first, otherwise a signed hard disk, at `0000:7c00` with drive `DL=00h` or `80h`. A missing boot signature does not launch that medium. The floppy is raw 1,228,800 bytes (80 cylinders, 2 heads, 15 512-byte sectors); the hard disk is raw 21,411,840 bytes (615 cylinders, 4 heads, 17 sectors).
 
+Use `--boot-drive hard-disk` or `--boot-drive floppy` to select a single
+boot source with the built-in firmware. The selected image must be present
+and signed. An unsigned sector stops with `missing_boot_signature` even when
+the other drive has a signed sector. Both attached drives retain their usual
+BIOS drive numbers and access permissions.
+
 | Interrupt | Implemented built-in calls |
 | --- | --- |
 | `INT 13h` | `AH=00` reset, `01` last status, `02` read, `03` write, `04` verify address/range, `08` geometry, `15` drive type. Only `DL=00h` and `80h` are recognized when the corresponding media exists. Floppy writes return status `03h` unless private writes were explicitly enabled with `--floppy-out`. Enabled writes validate the entire request before changing the private copy. Format (`05`) and unsupported calls return an error. |

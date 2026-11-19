@@ -95,6 +95,52 @@ class Pc286Tests(unittest.TestCase):
         self.assertEqual(process.stderr, "", diagnostic)
         return json.loads(process.stdout)
 
+    def test_boot_drive_with_attached_floppy(self):
+        # Both boot sectors save their entry DL and identify themselves in RAM.
+        # The fixed disk also reads a floppy sector and attempts a protected write.
+        fixed_code = bytes.fromhex(
+            "88160005 c6060105ad "  # [0500]=DL, [0501]=fixed guest ID
+            "b80102 bb0006 b90200 31d2 cd13 720f "  # read floppy sector 2
+            "b80103 cd13 7308 88260205 b06d e680 "  # [0502]=write error AH, POST
+            "fa f4")
+        fixed = self.scratch / "fixed.img"
+        with fixed.open("wb") as stream:
+            stream.write(fixed_code)
+            stream.seek(510)
+            stream.write(b"\x55\xaa")
+            stream.truncate(615 * 4 * 17 * 512)
+        floppy = bytearray(FLOPPY_SIZE)
+        floppy_code = bytes.fromhex("88160005 c6060105fd b06d e680 fa f4")
+        floppy[:len(floppy_code)] = floppy_code
+        floppy[510:512] = b"\x55\xaa"
+        payload = bytes((i * 29 + 1) & 255 for i in range(512))
+        floppy[512:1024] = payload
+        for drive, signature, expected in ((None, True, "00fd00"), ("floppy", True, "00fd00"),
+                                           ("hard-disk", True, "80ad03"), (None, False, "80ad03")):
+            with self.subTest(drive=drive, signature=signature):
+                floppy[510:512] = b"\x55\xaa" if signature else bytes(2)
+                args = ("--boot-drive", drive) if drive else ()
+                result = self.boot(floppy, "--hard-disk", fixed, *args, "--until-post", "0x6d",
+                                   "--inspect", "0x500:3", "--inspect", "0x600:512", floppy=True)
+                self.assertEqual(result["status"], "condition_met")
+                self.assertEqual(result["memory_ranges"][0]["bytes"], expected)
+                if expected.startswith("80"):
+                    self.assertEqual(bytes.fromhex(result["memory_ranges"][1]["bytes"]), payload)
+                self.assertEqual((self.scratch / "disk.img").read_bytes(), floppy)
+
+        # A selected unsigned disk must stop even when the other disk is bootable.
+        refused = self.boot(floppy, "--hard-disk", fixed, "--boot-drive", "floppy", floppy=True, exit_code=1)
+        self.assertIn("missing_boot_signature", str(refused))
+
+    def test_boot_drive_requires_builtin_firmware_and_selected_disk(self):
+        for args, floppy in ((("--boot-drive", "hard-disk"), True), (("--boot-drive", "usb"), True),
+                             (("--boot-drive", "floppy", "--boot-drive", "hard-disk"), True),
+                             (("--boot-drive", "floppy"), False)):
+            with self.subTest(args=args, floppy=floppy):
+                result = self.boot(make_floppy() if floppy else make_rom(b"\xf4"), *args,
+                                   floppy=floppy, exit_code=2)
+                self.assertEqual(result["cycles"], 0)
+
     def test_reset_vector_and_far_jump(self):
         image = make_rom(bytes.fromhex("f4"))
         reset = self.boot(image, "--until-pc", "0xfffff0")

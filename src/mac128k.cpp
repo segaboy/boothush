@@ -794,14 +794,19 @@ bool mac128k_read_floppy_state(const mac128k *machine, mac128k_floppy_state *sta
 
 bool mac128k_inject_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector)
 {
-    return machine && machine->iwm.inject_bad_checksum(track, sector);
+    return mac128k_configure_floppy_bad_checksum(machine, track, sector, false);
+}
+
+bool mac128k_configure_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector, bool once)
+{
+    return machine && machine->iwm.inject_bad_checksum(track, sector, once);
 }
 
 bool mac128k_read_floppy_checksum_fault(const mac128k *machine, mac128k_floppy_checksum_fault *state)
 {
     if (!machine || !state) return false;
     const auto fault = machine->iwm.checksum_fault();
-    *state = {fault.enabled, fault.track, fault.sector, fault.altered_nibbles};
+    *state = {fault.enabled, fault.track, fault.sector, fault.altered_nibbles, fault.once};
     return true;
 }
 

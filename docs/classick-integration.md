@@ -8,6 +8,23 @@ ClasSICK is BootHush's immediate integration priority. BootHush's broader goal i
 
 BootHush is a Windows command-line test runner. The local checkout contains the current interface and tests. The usual built executable on this machine is `C:\Repos\boothush\out\windows\boothush.exe`. A checkout and an executable are separate artifacts. Check the source revision with `git -C C:\Repos\boothush rev-parse HEAD`, inspect the executable with `--help` and `--version`, and use `Get-FileHash` to identify its bytes. Rebuild it from the checkout when the source or build provenance is uncertain. Build instructions and the complete command reference are in the [README](../README.md).
 
+To test an installed 286 runtime with a transport floppy attached, pass
+`--hard-disk INSTALLED.img --boot-drive hard-disk --floppy TRANSPORT.img`.
+The built-in firmware enters the fixed-disk boot sector with DL=80h even if
+the floppy also has a boot signature. The guest can use INT 13h drive 00h
+to read the transport. Omit `--floppy-out` to keep it write-protected.
+
+The two active-profile builds under
+`C:/Repos/.task-temp/boothush-drive-selection-20261119-a` produced identical
+`boothush-active.exe` files in `a/` and `b/`, SHA-256
+`5fa45b7542409300b7604606a78c81d4ee95e888a57c592a83d0cec43ce1056e`.
+`report.json` records the build inputs and commands. `tests.log` records 84
+passing test cases and two optional fixture skips. In the dual-signed test,
+the fixed-disk guest saved DL=80h, read the exact 512-byte payload from the
+floppy and received BIOS status 03h on a write attempt. The default boot
+entered the signed floppy with DL=00h. The same build ran the Mac one-shot
+retry fixture on raw and tagged DC42 images.
+
 Normal runs are headless and return one JSON result. When launching from Python with redirected output, use `creationflags=subprocess.CREATE_NO_WINDOW` to keep the console hidden. `--window-mouse` uses an invisible owned window with injected messages. `--live` opens a visible window for an explicitly selected interactive session. Neither requires control of unrelated Windows applications.
 
 Native Mac/286 `--cycles` now admits an explicit budget up to 20,000,000,000 with the existing required wall timeout. The [2026-11-18 long-cycle qualification](long-cycle-budgets-20261118.md) identifies the new active-profile executable, parsing and regression checks, and original instruction loops crossing the 32-bit clock. Input/capture/explicit witness limits are unchanged. Earlier integration receipts keep their original executable identities; select and qualify this newer binary explicitly for a longer workload.
@@ -225,6 +242,11 @@ with injection removed; they do not qualify a historical System Disk. The
 defines zero-based zone geometry and distinguishes altered returned nibbles
 from guest-observed errors.
 
-Mac floppy images are currently read-only. The [Mac floppy notes](mac-floppy.md) describe the missing write path. Mac mouse edge spacing and the VBL guard are configurable delivery controls. The model and its timing have not been established against a physical Macintosh. An emulator run alone does not establish physical-hardware behavior or historical System 1 compatibility.
+For a startup driver that retries, use `--mac-floppy-bad-checksum-once T:S`
+to corrupt one returned nibble. The original boot fixture in
+`tests/test_mac_floppy.py` checks its own rejection counter, reads the sector
+again, and executes the recovered sector in that same boot.
+
+Mac floppy images start write-protected. See the [Mac floppy notes](mac-floppy.md) for the private snapshot write path. Mac mouse edge spacing and the VBL guard are configurable delivery controls. The model and its timing have not been established against a physical Macintosh. An emulator run alone does not establish physical-hardware behavior or historical System 1 compatibility.
 
 The checked Mac and PC fixtures live in local ClasSICK directories and are optional inputs to BootHush tests. Existing ClasSICK scripts retain their current interface. Update them when they should consume multiple ranges, readiness-relative schedules, or the 286 witness. Run `ctest` with `BOOTHUSH_CLASSICK_LIVE_ROM` set to the intended pinned fixture and inspect its explicit fixture result when verifying the Mac integration.

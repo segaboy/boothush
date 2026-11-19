@@ -345,6 +345,40 @@ class MacintoshFloppyTests(BootHushTestCase):
                 self.assertNotIn("mac_floppy_checksum_fault", recovered)
                 self.assertEqual(hashlib.sha256(image.read_bytes()).digest(), source_hash)
 
+    def test_once_checksum_recovers_on_guest_retry_in_same_boot(self):
+        for track, sector, tags in ((0, 0, b""), (64, 7, bytes(range(12)) * 800)):
+            with self.subTest(track=track, sector=sector):
+                self.rom.write_bytes(make_floppy_rom(track, sector=sector, retries=1))
+                sectors = disk_image(track, sector)
+                contents = disk_copy_image(sectors, tags) if tags else sectors
+                image = self.scratch / "retry.img"
+                image.write_bytes(contents)
+                args = ("--floppy", image, "--until", "0xb00:1:0xa5",
+                        "--inspect", "0xb00:2", "--inspect", "0x1000:524")
+                result = self.boot(*args, "--mac-floppy-bad-checksum-once", f"{track}:{sector}",
+                                   cycles=4_000_000)
+                self.assertEqual(result["status"], "condition_met")
+                self.assertEqual(result["memory_ranges"][0]["bytes"], "a501")
+                expected_tags = tags[:12] or bytes(12)
+                self.assertEqual(bytes.fromhex(result["memory_ranges"][1]["bytes"]), expected_tags + sector_payload())
+                self.assertEqual(result["mac_floppy_checksum_fault"], {
+                    "kind": "synthetic_gcr_data_checksum", "mode": "once", "track": track,
+                    "sector": sector, "altered_nibbles": 1,
+                })
+                self.assertEqual(image.read_bytes(), contents)
+
+    def test_checksum_modes_are_exclusive_and_unread_once_stays_unused(self):
+        image = self.scratch / "unused.img"
+        image.write_bytes(disk_image(0))
+        once = ("--mac-floppy-bad-checksum-once", "0:0")
+        persistent = ("--mac-floppy-bad-checksum", "0:0")
+        result = self.boot("--floppy", image, *once)
+        self.assertEqual(result["mac_floppy_checksum_fault"]["altered_nibbles"], 0)
+        for options in ((*once, *once), (*persistent, *once), (*once, *persistent)):
+            with self.subTest(options=options):
+                result = self.boot("--floppy", image, *options, exit_code=2)
+                self.assertEqual(result["cycles"], 0)
+
     def test_bad_checksum_selects_last_sector_in_each_speed_zone(self):
         for track, sector in ((0, 11), (16, 10), (32, 9), (48, 8), (64, 7), (79, 7)):
             with self.subTest(track=track, sector=sector):

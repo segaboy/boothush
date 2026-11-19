@@ -337,7 +337,7 @@ void Iwm::write_data(uint64_t cycle, uint8_t value)
     }
 }
 
-bool Iwm::inject_bad_checksum(unsigned track, unsigned sector)
+bool Iwm::inject_bad_checksum(unsigned track, unsigned sector, bool once)
 {
     if (!inserted_ || track >= track_count || sector >= 12 - track / tracks_per_zone) {
         return false;
@@ -346,7 +346,7 @@ bool Iwm::inject_bad_checksum(unsigned track, unsigned sector)
     const auto code = std::find(gcr.begin(), gcr.end(), original);
     if (code == gcr.end()) return false;
     bad_checksum_nibble_ = gcr[static_cast<size_t>(code - gcr.begin()) ^ 1];
-    checksum_fault_ = {true, static_cast<uint8_t>(track), static_cast<uint8_t>(sector), 0};
+    checksum_fault_ = {true, static_cast<uint8_t>(track), static_cast<uint8_t>(sector), 0, once};
     return true;
 }
 
@@ -467,7 +467,8 @@ uint8_t Iwm::read_data(uint64_t cycle)
     const auto &track = tracks_[track_];
     ++nibbles_delivered_;
     const size_t offset = slot % track.size();
-    if (checksum_fault_.enabled && track_ == checksum_fault_.track &&
+    if (checksum_fault_.enabled && (!checksum_fault_.once || checksum_fault_.altered_nibbles == 0) &&
+        track_ == checksum_fault_.track &&
         offset == checksum_offsets_[track_][checksum_fault_.sector]) {
         ++checksum_fault_.altered_nibbles;
         return bad_checksum_nibble_;

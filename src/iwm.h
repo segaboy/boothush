@@ -22,6 +22,7 @@ public:
         bool enabled = false;
         uint8_t track = 0, sector = 0;
         uint64_t altered_nibbles = 0;
+        bool once = false;
     };
     struct WriteState {
         bool enabled, error, gate_open;
@@ -38,8 +39,7 @@ public:
     void write(unsigned reg, bool select, uint64_t cycle, uint8_t value);
     // Copies modeled state only; never touches soft switches or the data latch.
     State state(uint64_t cycle) const;
-    // Configures a persistent synthetic checksum error on inserted media.
-    bool inject_bad_checksum(unsigned track, unsigned sector);
+    bool inject_bad_checksum(unsigned track, unsigned sector, bool once);
     ChecksumFault checksum_fault() const { return checksum_fault_; }
 
 private:

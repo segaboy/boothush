@@ -179,7 +179,7 @@ struct pc286 final : boothush_i286::Bus {
         write_word(vector + 2, uint16_t(rom_base >> 4));
     }
 
-    void initialize_firmware()
+    void initialize_firmware(pc286_boot_drive boot_drive)
     {
         built_in_firmware = true;
         rom.fill(0xff);
@@ -209,8 +209,9 @@ struct pc286 final : boothush_i286::Bus {
         keyboard.write_port(0x60, 0x40); // BIOS keyboard services receive translated set 1.
         set_video_mode(3);
 
-        const bool boot_floppy = floppy && read_word(floppy.get() + sector_size - 2) == 0xaa55;
-        const bool boot_hard_disk = hard_disk &&
+        const bool boot_floppy = boot_drive != PC286_BOOT_HARD_DISK && floppy &&
+            read_word(floppy.get() + sector_size - 2) == 0xaa55;
+        const bool boot_hard_disk = boot_drive != PC286_BOOT_FLOPPY && hard_disk &&
             read_word(hard_disk.get() + sector_size - 2) == 0xaa55;
         if (!boot_floppy && !boot_hard_disk) {
             fault = "missing_boot_signature";
@@ -919,8 +920,19 @@ pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size)
 {
+    return pc286_create_system_with_boot_drive(rom, rom_size, floppy, floppy_size, disk, disk_size, PC286_BOOT_AUTO);
+}
+
+pc286 *pc286_create_system_with_boot_drive(const uint8_t *rom, size_t rom_size,
+                                          const uint8_t *floppy, size_t floppy_size,
+                                          const uint8_t *disk, size_t disk_size,
+                                          pc286_boot_drive boot_drive)
+{
     static_assert(PC286_HARD_DISK_SIZE == PcatHardDisk::image_size);
     if ((!rom && !floppy && !disk) ||
+        (boot_drive != PC286_BOOT_AUTO && boot_drive != PC286_BOOT_FLOPPY && boot_drive != PC286_BOOT_HARD_DISK) ||
+        (boot_drive == PC286_BOOT_FLOPPY && (rom || !floppy)) ||
+        (boot_drive == PC286_BOOT_HARD_DISK && (rom || !disk)) ||
         rom_size != (rom ? PC286_ROM_SIZE : 0u) ||
         floppy_size != (floppy ? PC286_FLOPPY_SIZE : 0u) ||
         disk_size != (disk ? PC286_HARD_DISK_SIZE : 0u)) {
@@ -951,7 +963,7 @@ pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
     if (rom) {
         std::memcpy(machine->rom.data(), rom, rom_size);
     } else {
-        machine->initialize_firmware();
+        machine->initialize_firmware(boot_drive);
     }
     return machine.release();
 }

@@ -74,6 +74,11 @@ pc286 *pc286_create_floppy(const uint8_t *image, size_t size);
 pc286 *pc286_create_system(const uint8_t *rom, size_t rom_size,
                            const uint8_t *floppy, size_t floppy_size,
                            const uint8_t *disk, size_t disk_size);
+enum pc286_boot_drive { PC286_BOOT_AUTO, PC286_BOOT_FLOPPY, PC286_BOOT_HARD_DISK };
+pc286 *pc286_create_system_with_boot_drive(const uint8_t *rom, size_t rom_size,
+                                          const uint8_t *floppy, size_t floppy_size,
+                                          const uint8_t *disk, size_t disk_size,
+                                          enum pc286_boot_drive boot_drive);
 /* Built-in firmware only: opt in to BIOS sector writes on the owned copy.
  * Rejects NULL, absent floppy or external firmware; FDC writes are unchanged. */
 bool pc286_enable_floppy_writes(pc286 *machine);

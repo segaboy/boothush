@@ -89,6 +89,7 @@ struct request {
     const wchar_t *floppy_out_path;
     const wchar_t *disk_path;
     const wchar_t *disk_out_path;
+    enum pc286_boot_drive boot_drive;
     const wchar_t *ega_rom_path;
     const wchar_t *ega_font_path;
     const wchar_t *frame_path;
@@ -156,6 +157,7 @@ struct request {
     bool mac_cpu_state;
     bool mac_floppy_state;
     bool mac_floppy_bad_checksum_set;
+    bool mac_floppy_bad_checksum_once;
     uint32_t mac_floppy_bad_checksum[2];
     bool raw_mouse_phases;
     bool relative_motion;
@@ -504,6 +506,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             memcpy(request->fail_hard_disk_write, fields, sizeof(request->fail_hard_disk_write));
         } else if (wcscmp(option, L"--hard-disk") == 0 && request->disk_path == NULL) {
             request->disk_path = value;
+        } else if (wcscmp(option, L"--boot-drive") == 0 && request->boot_drive == PC286_BOOT_AUTO) {
+            if (wcscmp(value, L"hard-disk") == 0) request->boot_drive = PC286_BOOT_HARD_DISK;
+            else if (wcscmp(value, L"floppy") == 0) request->boot_drive = PC286_BOOT_FLOPPY;
+            else return "boot-drive requires hard-disk or floppy";
         } else if (wcscmp(option, L"--disk-out") == 0 && request->disk_out_path == NULL) {
             request->disk_out_path = value;
         } else if (wcscmp(option, L"--ega-rom") == 0 && request->ega_rom_path == NULL) {
@@ -580,10 +586,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         } else if (wcscmp(option, L"--mac-floppy-state") == 0 && !request->mac_floppy_state) {
             if (wcscmp(value, L"1") != 0) return "mac-floppy-state requires 1";
             request->mac_floppy_state = true;
-        } else if (wcscmp(option, L"--mac-floppy-bad-checksum") == 0 && !request->mac_floppy_bad_checksum_set) {
+        } else if ((wcscmp(option, L"--mac-floppy-bad-checksum") == 0 ||
+                    wcscmp(option, L"--mac-floppy-bad-checksum-once") == 0) && !request->mac_floppy_bad_checksum_set) {
             if (!parse_fields(value, fields, 2) || fields[0] >= 80 || fields[1] >= 12 - fields[0] / 16)
                 return "mac-floppy-bad-checksum requires zero-based track:sector within Macintosh 400 KiB geometry";
             request->mac_floppy_bad_checksum_set = true;
+            request->mac_floppy_bad_checksum_once = wcscmp(option, L"--mac-floppy-bad-checksum-once") == 0;
             memcpy(request->mac_floppy_bad_checksum, fields, sizeof(request->mac_floppy_bad_checksum));
         } else if (wcscmp(option, L"--mouse-witness-cpu") == 0 && !request->mouse_witness_cpu) {
             if (wcscmp(value, L"1") != 0) return "mouse-witness-cpu requires 1";
@@ -724,6 +732,11 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if(request->mac_cpu_state && request->machine!=MACHINE_MAC128K) return "mac-cpu-state requires mac128k";
     if(request->mac_floppy_state && request->machine!=MACHINE_MAC128K) return "mac-floppy-state requires mac128k";
     if(request->floppy_out_path && !request->floppy_path) return "floppy-out requires a floppy";
+    if (request->boot_drive != PC286_BOOT_AUTO && (request->machine != MACHINE_PC286 || request->rom_path))
+        return "boot-drive requires the pc286 built-in firmware";
+    if ((request->boot_drive == PC286_BOOT_FLOPPY && !request->floppy_path) ||
+        (request->boot_drive == PC286_BOOT_HARD_DISK && !request->disk_path))
+        return "boot-drive requires the selected image";
     if(request->floppy_out_path && request->machine==MACHINE_PC286 && request->rom_path)
         return "floppy-out on pc286 requires built-in firmware";
     if(request->floppy_out_path) {
@@ -1353,8 +1366,9 @@ static void print_result(const char *status, enum machine_kind machine,
         }
         if (floppy_fault) {
             printf(",\"mac_floppy_checksum_fault\":{\"kind\":\"synthetic_gcr_data_checksum\","
-                   "\"mode\":\"persistent\",\"track\":%u,\"sector\":%u,\"altered_nibbles\":%" PRIu64 "}",
-                   (unsigned)floppy_fault->track, (unsigned)floppy_fault->sector, floppy_fault->altered_nibbles);
+                   "\"mode\":\"%s\",\"track\":%u,\"sector\":%u,\"altered_nibbles\":%" PRIu64 "}",
+                   floppy_fault->once ? "once" : "persistent", (unsigned)floppy_fault->track,
+                   (unsigned)floppy_fault->sector, floppy_fault->altered_nibbles);
         }
         if (floppy) {
             printf(",\"mac_floppy\":{\"observation\":\"modeled_iwm\",\"media_present\":%s,"
@@ -1899,8 +1913,8 @@ static const char *create_machine(struct machine *machine, const struct request 
             if (error == NULL && machine->mac && request->floppy_out_path &&
                 !mac128k_enable_floppy_writes(machine->mac)) error = "cannot enable private Macintosh floppy writes";
         } else {
-            machine->pc = pc286_create_system(rom.bytes, rom.size, floppy.bytes, floppy.size,
-                                              disk.bytes, disk.size);
+            machine->pc = pc286_create_system_with_boot_drive(rom.bytes, rom.size, floppy.bytes, floppy.size,
+                                                              disk.bytes, disk.size, request->boot_drive);
             if (machine->pc && request->floppy_out_path && !pc286_enable_floppy_writes(machine->pc))
                 error = "cannot enable private PC floppy writes";
             if (machine->pc != NULL && ega_rom.bytes != NULL &&
@@ -2447,12 +2461,14 @@ int wmain(int argc, wchar_t **argv)
              "Host capability only: --x64-capability (does not run a guest)\n"
              "Required: --machine mac128k|pc286 --cycles N --timeout-ms N\n"
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
+             "  --boot-drive hard-disk|floppy selects the pc286 built-in firmware boot device.\n"
              "  --floppy-out NEW_PATH enables private floppy writes and snapshots only a successful run.\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
         "  --mac-floppy-state 1 adds a side-effect-free modeled IWM snapshot and activity counters.\n"
         "  --mac-floppy-bad-checksum TRACK:SECTOR injects a persistent synthetic sector checksum error.\n"
+        "  --mac-floppy-bad-checksum-once TRACK:SECTOR alters only the first matching checksum nibble returned.\n"
              "Video: --video PATH [--video-fps 1..60] [--video-frames 1..3600] [--video-start CYCLE] (Y4M)\n"
              "Convert: --convert-capture INPUT --output OUTPUT (.gif, .mp4 or .png; bundled FFmpeg)\n"
              "Mac input: --mouse-motion CYCLE:DX:DY --mouse-button CYCLE:STATE\n"
@@ -2497,7 +2513,8 @@ int wmain(int argc, wchar_t **argv)
     struct machine machine = {0};
     error = create_machine(&machine, &request);
     if (error == NULL && request.mac_floppy_bad_checksum_set &&
-        !mac128k_inject_floppy_bad_checksum(machine.mac, request.mac_floppy_bad_checksum[0], request.mac_floppy_bad_checksum[1]))
+        !mac128k_configure_floppy_bad_checksum(machine.mac, request.mac_floppy_bad_checksum[0],
+                                              request.mac_floppy_bad_checksum[1], request.mac_floppy_bad_checksum_once))
         error = "cannot configure Macintosh floppy checksum fault";
     if (error == NULL && request.fail_floppy_read_set &&
         !pc286_fail_floppy_read(machine.pc, request.fail_floppy_read[0], request.fail_floppy_read[1], request.fail_floppy_read[2]))

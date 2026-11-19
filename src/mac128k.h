@@ -56,8 +56,10 @@ typedef struct {
     bool enabled;
     uint8_t track, sector;
     uint64_t altered_nibbles;
+    bool once;
 } mac128k_floppy_checksum_fault;
 bool mac128k_inject_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector);
+bool mac128k_configure_floppy_bad_checksum(mac128k *machine, unsigned track, unsigned sector, bool once);
 bool mac128k_read_floppy_checksum_fault(const mac128k *machine, mac128k_floppy_checksum_fault *state);
 
 /* M0110 witness kinds 0-8 follow queue, reject, mode, SR write, command

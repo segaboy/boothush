@@ -95,6 +95,14 @@ file and private encoded tracks are not modified. The fault persists on subseque
 and guest retries; it does not synthesize a BIOS/ROM error code or a physical
 disk defect. The guest must detect and handle the incorrect checksum.
 
+`--mac-floppy-bad-checksum-once TRACK:SECTOR` changes the first matching
+checksum nibble that the controller actually returns. A later read can return
+the intact checksum in the same boot, allowing the guest to recover by
+rereading the sector. The report uses `"mode":"once"` and keeps the count
+at one after delivery. A guest polling the stream can consume the fault
+before it attempts to decode the record. Use guest RAM to establish whether
+it detected an error and retried. Select one checksum option per run.
+
 Every run with the option reports `mac_floppy_checksum_fault`, even without
 `--mac-floppy-state`:
 
