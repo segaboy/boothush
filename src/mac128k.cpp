@@ -146,6 +146,7 @@ struct mac128k {
     uint64_t next_vbl_cycle = cycles_per_vbl;
     uint32_t fault_address = 0;
     const char *fault_operation = nullptr;
+    mac128k_ram_steps ram_steps{};
     uint8_t irq_level = 0;
     std::unique_ptr<mac128k_mouse_witness_event[]> witness;
     uint64_t witness_first = 0;
@@ -737,15 +738,35 @@ bool mac128k_read_floppy_write_state(const mac128k *machine, mac128k_floppy_writ
     return true;
 }
 
+bool mac128k_watch_ram_steps(mac128k *machine, uint32_t address, uint32_t length, uint32_t target)
+{
+    if (!machine || !target || !length || !contains(0, MAC128K_RAM_SIZE, address, length)) return false;
+    machine->ram_steps = {address, length, target, 0, 0, 0, 0};
+    return true;
+}
+
+const mac128k_ram_steps *mac128k_get_ram_steps(const mac128k *machine)
+{
+    return machine && machine->ram_steps.target ? &machine->ram_steps : nullptr;
+}
+
 void mac128k_run(mac128k *machine, uint32_t cycles)
 {
-    if (machine->fault_operation) {
+    auto &steps = machine->ram_steps;
+    if (machine->fault_operation || (steps.target && steps.returned == steps.target)) {
         return;
     }
     const auto start_cycle = machine->cpu.getClock();
     try {
         while (machine->cpu.getClock() - start_cycle < cycles) {
             const uint32_t instruction = machine->cpu.getPC();
+            const bool count_step = steps.target && instruction >= steps.address &&
+                instruction - steps.address < steps.length && !machine->overlay();
+            if (count_step) {
+                if (!steps.started) steps.first_pc = instruction;
+                steps.last_pc = instruction;
+                ++steps.started;
+            }
             if (machine->witness && machine->witness_detail) machine->observe_cpu_mask(instruction);
             if (machine->witness && machine->witness_detail && machine->witness_cpu)
                 machine->observe(MAC128K_WITNESS_CPU_STEP,
@@ -756,6 +777,7 @@ void mac128k_run(mac128k *machine, uint32_t cycles)
             if (machine->cpu.isHalted()) {
                 machine->fault(machine->cpu.getPC(), "halt");
             }
+            if (count_step && ++steps.returned == steps.target) break;
         }
     } catch (const AccessFault &) {
         // The faulting bus access has already been recorded.

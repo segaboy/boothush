@@ -220,6 +220,12 @@ checks after a startup or interaction sequence without modifying guest code.
 The [cycle-qualified stop contract](pc-stop-cycle.md) describes boundaries,
 refusals and downstream post-recovery game-call evidence.
 
+For disk entry, use `--until-mac-ram-steps START:LENGTH:COUNT` to stop just
+after modeled CPU steps from the specified low-RAM range. Omit `--inspect`
+and trace options when collecting only the numeric PC and step counts.
+The [step predicate](pc-stop-cycle.md#mac-low-ram-step-counts) documents
+overlay, fault, and interrupt limitations.
+
 Both existing machines can record a bounded headless Y4M video, then use the bundled FFmpeg to make GIF, MP4 or PNG without relying on a system installation. See the [capture guide](headless-capture.md) for complete commands, bundle setup, timing and limits. The x64 profile is not implemented and cannot yet produce frames.
 
 Mac captures use PBM. PC captures use RGB PPM. EGA graphics capture is available, and `--ega-font PATH` enables a fixed 80×25 text snapshot using a caller-supplied 3,584-byte font. The [EGA reference](ega.md) defines layout and limitations. The [PC/AT profile](pc-at.md) describes 286 hardware and media.

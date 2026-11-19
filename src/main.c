@@ -131,6 +131,8 @@ struct request {
     uint32_t inspect_total;
     bool stop_at_pc;
     uint32_t target_pc;
+    struct inspection ram_step_range;
+    uint32_t ram_step_target;
     bool pc_after_set;
     uint32_t pc_after_cycle;
     bool stop_at_post;
@@ -689,6 +691,12 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
                 return "input-after requires a RAM address, width 1, 2, or 4, and a fitting value";
             }
             request->input_after = (struct predicate){fields[0], fields[1], fields[2]};
+        } else if (wcscmp(option, L"--until-mac-ram-steps") == 0 && !request->ram_step_target) {
+            if (!parse_fields(value, fields, 3) || !fields[1] || !fields[2] ||
+                fields[0] >= MAC128K_RAM_SIZE || fields[1] > MAC128K_RAM_SIZE - fields[0])
+                return "until-mac-ram-steps requires a low RAM start:length and a positive step count";
+            request->ram_step_range = (struct inspection){fields[0], fields[1]};
+            request->ram_step_target = fields[2];
         } else if (wcscmp(option, L"--until-pc") == 0 && !request->stop_at_pc) {
             if (!parse_fields(value, fields, 1) || fields[0] > 0xffffff) {
                 return "until-pc requires a 24-bit address";
@@ -767,7 +775,9 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
         return "video settings require video";
     if (!request->video_fps_set) request->video_fps = 10;
     if (!request->video_limit_set) request->video_limit = 300;
-    if ((request->until.width != 0) + request->stop_at_pc + request->stop_at_post > 1) {
+    if (request->ram_step_target && request->machine != MACHINE_MAC128K)
+        return "until-mac-ram-steps requires mac128k";
+    if ((request->until.width != 0) + request->stop_at_pc + request->stop_at_post + (request->ram_step_target != 0) > 1) {
         return "choose one stop condition";
     }
     if (request->input_event_count != 0 &&
@@ -1350,12 +1360,18 @@ static void print_result(const char *status, enum machine_kind machine,
                          const struct display_summary *display,const struct keyboard_fault_result *fault,
                          const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy,
                          const mac128k_floppy_checksum_fault *floppy_fault,
-                         const mac128k_floppy_write_state *floppy_write)
+                         const mac128k_floppy_write_state *floppy_write, const mac128k_ram_steps *ram_steps)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
     if (machine == MACHINE_MAC128K) {
         printf(",\"machine\":\"mac128k\",\"vbl\":%" PRIu64, state.vbl);
+        if (ram_steps) {
+            printf(",\"mac_ram_steps\":{\"address\":%u,\"length\":%u,\"target\":%u,"
+                   "\"started\":%u,\"returned\":%u,\"first_pc\":%u,\"last_pc\":%u}",
+                   ram_steps->address, ram_steps->length, ram_steps->target, ram_steps->started,
+                   ram_steps->returned, ram_steps->first_pc, ram_steps->last_pc);
+        }
         if(floppy_write) {
             printf(",\"mac_floppy_write\":{\"enabled\":%s,\"error\":%s,\"gate_open\":%s,"
                    "\"pending_bytes\":%" PRIu32 ",\"accepted_bytes\":%" PRIu64 ","
@@ -1518,7 +1534,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -1681,7 +1697,9 @@ static struct run_result run_machine(struct machine *machine, const struct reque
     }
     const double timeout_ticks = (double)frequency.QuadPart * request->timeout_ms / 1000.0;
     const LONGLONG pump_interval = frequency.QuadPart * LIVE_PUMP_INTERVAL_MS / 1000;
-    const bool use_predicate = request->until.width != 0 || request->stop_at_pc || request->stop_at_post;
+    const bool step_each_instruction = request->until.width != 0 || request->stop_at_pc || request->stop_at_post;
+    const mac128k_ram_steps *ram_steps = mac128k_get_ram_steps(machine->mac);
+    const bool use_predicate = step_each_instruction || ram_steps;
     uint64_t cycle_limit = request->cycle_limit;
     const bool reaches_recorded_end = mouse->replay != NULL &&
                                       mac_mouse_trace_stop_cycle(mouse->replay) <= cycle_limit;
@@ -1744,7 +1762,8 @@ static struct run_result run_machine(struct machine *machine, const struct reque
             if(series->memory.length && !read_ram(machine,series->memory.address,sample->memory,series->memory.length))
                 return (struct run_result){"error","cannot read series memory",2};
         }
-        if ((request->stop_at_pc && state.pc == request->target_pc &&
+        if ((ram_steps && ram_steps->returned == ram_steps->target) ||
+            (request->stop_at_pc && state.pc == request->target_pc &&
              state.cycles >= request->pc_after_cycle) ||
             (request->stop_at_post && state.post_written && state.post == request->target_post) ||
             matches(machine, request->until)) {
@@ -1843,7 +1862,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
         }
 
         const uint64_t previous_cycles = state.cycles;
-        uint32_t slice = use_predicate ? 1 : CYCLE_SLICE;
+        uint32_t slice = step_each_instruction ? 1 : CYCLE_SLICE;
         slice = slice_before(slice, previous_cycles, cycle_limit);
         slice = slice_before(slice, previous_cycles, live_target);
         slice = slice_before(slice, previous_cycles, mouse_deadline);
@@ -2464,6 +2483,7 @@ int wmain(int argc, wchar_t **argv)
              "  --boot-drive hard-disk|floppy selects the pc286 built-in firmware boot device.\n"
              "  --floppy-out NEW_PATH enables private floppy writes and snapshots only a successful run.\n"
              "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
+             "  --until-mac-ram-steps START:LENGTH:COUNT stops after CPU steps beginning in the low RAM range.\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
         "  --mac-floppy-state 1 adds a side-effect-free modeled IWM snapshot and activity counters.\n"
@@ -2512,6 +2532,10 @@ int wmain(int argc, wchar_t **argv)
     }
     struct machine machine = {0};
     error = create_machine(&machine, &request);
+    if (!error && request.ram_step_target &&
+        !mac128k_watch_ram_steps(machine.mac, request.ram_step_range.address,
+                                 request.ram_step_range.length, request.ram_step_target))
+        error = "could not configure low RAM step observation";
     if (error == NULL && request.mac_floppy_bad_checksum_set &&
         !mac128k_configure_floppy_bad_checksum(machine.mac, request.mac_floppy_bad_checksum[0],
                                               request.mac_floppy_bad_checksum[1], request.mac_floppy_bad_checksum_once))
@@ -2709,7 +2733,7 @@ int wmain(int argc, wchar_t **argv)
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
                  request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL,
                  cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL,floppy_fault_observed?&floppy_fault:NULL,
-                 floppy_write_observed?&floppy_write:NULL);
+                 floppy_write_observed?&floppy_write:NULL, mac128k_get_ram_steps(machine.mac));
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

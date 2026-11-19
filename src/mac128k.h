@@ -39,6 +39,12 @@ typedef struct {
 } mac128k_cpu_state;
 bool mac128k_read_cpu_state(const mac128k *machine, mac128k_cpu_state *state);
 
+typedef struct {
+    uint32_t address, length, target, first_pc, last_pc, started, returned;
+} mac128k_ram_steps;
+bool mac128k_watch_ram_steps(mac128k *machine, uint32_t address, uint32_t length, uint32_t target);
+const mac128k_ram_steps *mac128k_get_ram_steps(const mac128k *machine);
+
 /* Side-effect-free IWM snapshot. Counters cover this machine's lifetime and
    count modeled device activity, not completed guest sector reads or boot. */
 typedef struct {

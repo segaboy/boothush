@@ -176,6 +176,24 @@ def disk_copy_image(sectors, tags):
 
 
 class MacintoshFloppyTests(BootHushTestCase):
+    def test_stop_after_first_step_of_sector_loaded_into_ram(self):
+        self.rom.write_bytes(make_floppy_rom(retries=1))
+        image = self.scratch / "first-step.raw"
+        image.write_bytes(disk_image(0))
+        args = ("--floppy", image, "--until-mac-ram-steps", "0x100c:2:1")
+        # The original sector begins with an eight-byte MOVE.B that sets $b00.
+        result = self.boot(*args, "--mac-floppy-bad-checksum-once", "0:0", cycles=4_000_000)
+        self.assertEqual((result["status"], result["pc"]), ("condition_met", 0x1014))
+        self.assertEqual(result["mac_ram_steps"]["first_pc"], 0x100c)
+        self.assertEqual(result["mac_ram_steps"]["returned"], 1)
+        self.assertNotIn("memory", result)
+        self.assertNotIn("memory_ranges", result)
+        self.assertEqual(result["mac_floppy_checksum_fault"]["altered_nibbles"], 1)
+        rejected = self.boot(*args, "--mac-floppy-bad-checksum", "0:0", cycles=4_000_000, exit_code=1)
+        self.assertEqual(rejected["status"], "cycle_limit")
+        self.assertEqual(rejected["mac_ram_steps"]["started"], 0)
+        self.assertEqual(rejected["mac_floppy_checksum_fault"]["altered_nibbles"], 2)
+
     def test_raw_floppy_boots_after_seek_to_different_speed_zone(self):
         image = self.scratch / "raw.dsk"
         self.rom.write_bytes(make_floppy_rom(64, attempt_write=True))

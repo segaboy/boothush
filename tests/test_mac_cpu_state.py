@@ -5,6 +5,50 @@ from test_boot import BootHushTestCase, make_rom, ROM_ENTRY
 
 
 class MacCpuStateTests(BootHushTestCase):
+    def test_stop_after_low_ram_steps_counts_only_starts_inside_range(self):
+        # Move a loop into low RAM after removing the ROM overlay. The backward
+        # branch at $1804 is outside our four-byte range and re-enters at $1802.
+        code = bytes.fromhex('13fc000000effffe 13fc003000efe7fe '
+                             '23fc7005528000001800 33fc60fc00001804 4ef900001800')
+        self.rom.write_bytes(make_rom(code))
+        at_entry = self.boot('--until-pc', '0x1800', '--mac-cpu-state', '1')
+        self.assertEqual(at_entry['pc'], 0x1800)
+        for count, expected_pc, expected_d0, last in ((1, 0x1802, 5, 0x1800),
+                                                       (2, 0x1804, 6, 0x1802),
+                                                       (3, 0x1804, 7, 0x1802)):
+            with self.subTest(count=count):
+                result = self.boot('--until-mac-ram-steps', f'0x1800:4:{count}', '--mac-cpu-state', '1')
+                self.assertEqual(result['status'], 'condition_met')
+                self.assertEqual((result['pc'], result['cpu']['d'][0]), (expected_pc, expected_d0))
+                self.assertGreater(result['cycles'], at_entry['cycles'])
+                self.assertEqual(result.pop('mac_ram_steps'), {
+                    'address': 0x1800, 'length': 4, 'target': count, 'started': count,
+                    'returned': count, 'first_pc': 0x1800, 'last_pc': last})
+                control = self.boot('--until-pc', str(expected_pc), '--until-pc-after',
+                                    str(result['cycles']), '--mac-cpu-state', '1')
+                self.assertEqual(result, control)
+
+    def test_ram_steps_exclude_overlay_and_report_faulting_step(self):
+        overlay = make_rom(bytes.fromhex('60fe'))
+        struct.pack_into('>I', overlay, 4, 0x104)  # Execute a ROM overlay alias.
+        self.rom.write_bytes(overlay)
+        result = self.boot('--until-mac-ram-steps', '0x104:2:1', exit_code=1)
+        self.assertEqual((result['status'], result['pc']), ('cycle_limit', 0x104))
+        self.assertEqual(result['mac_ram_steps']['started'], 0)
+        code = bytes.fromhex('13fc000000effffe 13fc003000efe7fe '
+                             '23fc13fc000100001800 23fc0080000000001804 4ef900001800')
+        self.rom.write_bytes(make_rom(code))
+        result = self.boot('--until-mac-ram-steps', '0x1800:2:1', exit_code=1)
+        self.assertEqual(result['status'], 'machine_fault')
+        steps = result['mac_ram_steps']
+        self.assertEqual((steps['started'], steps['returned'], steps['last_pc']), (1, 0, 0x1800))
+
+    def test_ram_step_predicate_rejects_invalid_ranges_or_combined_stops(self):
+        for value in ('0:2:0', '0:0:1', '0x20000:1:1', '0x1ffff:2:1', '1:0xffffffff:2'):
+            with self.subTest(value=value):
+                self.assertEqual(self.boot('--until-mac-ram-steps', value, exit_code=2)['cycles'], 0)
+        self.assertEqual(self.boot('--until-mac-ram-steps', '0:2:1', '--until-pc', '0', exit_code=2)['cycles'], 0)
+
     def test_all_registers_and_noninterference(self):
         data = [0, 1, 0x80000000, 0xFFFFFFFF, 0x12345678, 0xA5A55A5A, 0x76543210, 0xFEDCBA98]
         addr = [0x2000 + 0x102 * i for i in range(7)] + [0x6000]
