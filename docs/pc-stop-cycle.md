@@ -19,6 +19,26 @@ cycle. Use that observed before-call cycle as the lower bound for the return
 PC run; this avoids selecting a previous iteration's return. Confirm the
 actual stop, register/stack/frame state, and call order.
 
+## Count visits to a known PC
+
+For Mac128K and PC286, `--until-pc ADDRESS --until-pc-visits N` stops on
+the Nth eligible CPU boundary at the supplied address. A loop can visit the
+same address multiple times. With `--until-pc-after CYCLE`, counting begins
+at that cycle, inclusively. N is a positive unsigned 32-bit count. The
+ordinary PC stop retains its original first-match behavior and output.
+
+The optional JSON object `pc_visits` contains `address`, `target`, `count`,
+`first_cycle` and `last_cycle`. The cycle fields are zero until the first
+match. The count includes a matching reset boundary. Live input polling
+at the same cycle counts once. A terminal fault or 286 halt adds no visit,
+even if HLT leaves the PC pointing at the requested address. Partial counts
+are reported when the guest halts or exhausts its budget. A matching visit
+observes a CPU boundary before execution and does not establish that the
+instruction there completed. Only the address and cycle clock are sampled.
+
+For example, an installed 286 workload can stop on its third entry to a native
+dispatcher by passing `--until-pc $DispatcherPC --until-pc-visits 3`.
+
 ## Verification, 2026-11-16
 
 See also the Mac low-RAM step predicate below for observing execution after a

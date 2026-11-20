@@ -165,6 +165,22 @@ class Pc286Tests(unittest.TestCase):
         self.assertNotEqual(later['memory']['bytes'], first['memory']['bytes'])
         self.assertEqual(later, self.boot(image, *args, '--until-pc-after', str(later['cycles'])))
 
+    def test_pc_visits_before_halt(self):
+        # Call the same RET twice. The first unreachable visit must report the
+        # observed total without needing a separate reboot for each call.
+        image = make_rom(bytes.fromhex('e80400 e80100 f4 c3'))
+        args = ('--until-pc', '0xf0007')
+        first = self.boot(image, *args)
+        second = self.boot(image, *args, '--until-pc-visits', '2')
+        self.assertGreater(second['cycles'], first['cycles'])
+        self.assertEqual(second['pc_visits'], dict(address=0xf0007, target=2, count=2,
+                                                   first_cycle=first['cycles'], last_cycle=second['cycles']))
+        missed = self.boot(image, *args, '--until-pc-visits', '3', exit_code=1)
+        self.assertEqual(missed['status'], 'halted')
+        self.assertEqual(missed['pc_visits'], dict(second['pc_visits'], target=3))
+        never = self.boot(image, '--until-pc', '0xf0050', '--until-pc-visits', '1', exit_code=1)
+        self.assertEqual(never['pc_visits'], dict(address=0xf0050, target=1, count=0, first_cycle=0, last_cycle=0))
+
     def test_286_protected_mode_and_post_condition(self):
         image = make_rom(PROTECTED_PROGRAM, protected_mode=True)
         reset_msw = self.boot(image, "--until", "0x600:2:0xfff0", "--inspect", "0x600:4")

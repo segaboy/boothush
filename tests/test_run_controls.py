@@ -6,6 +6,32 @@ from test_boot import BootHushTestCase, make_rom
 
 
 class RunControlTests(BootHushTestCase):
+    def test_pc_visits_count_with_inclusive_cycle_filter(self):
+        self.rom.write_bytes(make_rom(bytes.fromhex('7000 5280 60fc')))
+        args = ('--until-pc', '0x400106', '--mac-cpu-state', '1')
+        first = self.boot(*args)
+        one = self.boot(*args, '--until-pc-visits', '1')
+        observation = one.pop('pc_visits')
+        self.assertEqual(one, first)
+        self.assertEqual(observation, dict(address=0x400106, target=1, count=1,
+                                           first_cycle=first['cycles'], last_cycle=first['cycles']))
+        third = self.boot(*args, '--until-pc-visits', '3')
+        self.assertEqual(third['cpu']['d'][0], 2)
+        self.assertEqual(third['pc_visits']['first_cycle'], first['cycles'])
+        self.assertEqual(third['pc_visits']['last_cycle'], third['cycles'])
+        later = self.boot(*args, '--until-pc-visits', '2', '--until-pc-after', str(third['cycles']))
+        self.assertEqual(later['pc_visits']['first_cycle'], third['cycles'])
+        self.assertEqual(later['cpu']['d'][0], 3)
+        missed = self.boot('--until-pc', '0x400104', '--until-pc-visits', '3', exit_code=1)
+        self.assertEqual((missed['status'], missed['pc_visits']['count']), ('cycle_limit', 1))
+
+    def test_pc_visit_refusals(self):
+        for args in (('--until-pc-visits', '1'), ('--until-pc', '0', '--until-pc-visits', '0'),
+                     ('--until-pc', '0', '--until-pc-visits', '4294967296'),
+                     ('--until-pc', '0', '--until-pc-visits', '1', '--until-pc-visits', '2')):
+            with self.subTest(args=args):
+                self.assertEqual(self.boot(*args, exit_code=2)['status'], 'error')
+
     def test_stop_at_initial_pc(self):
         result = self.boot("--until-pc", "0x400104")
         self.assertEqual(result["status"], "condition_met")

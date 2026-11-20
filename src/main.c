@@ -131,6 +131,7 @@ struct request {
     uint32_t inspect_total;
     bool stop_at_pc;
     uint32_t target_pc;
+    uint32_t target_pc_visits;
     struct inspection ram_step_range;
     uint32_t ram_step_target;
     bool pc_after_set;
@@ -174,9 +175,15 @@ struct image {
     DWORD size;
 };
 
+struct pc_visits {
+    uint32_t address, target, count;
+    uint64_t first_cycle, last_cycle;
+};
+
 struct machine {
     mac128k *mac;
     pc286 *pc;
+    struct pc_visits visits;
     uint8_t rom_sha256[32];
 };
 
@@ -703,6 +710,10 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
             }
             request->stop_at_pc = true;
             request->target_pc = fields[0];
+        } else if (wcscmp(option, L"--until-pc-visits") == 0 && !request->target_pc_visits) {
+            if (!parse_fields(value, fields, 1) || !fields[0])
+                return "until-pc-visits requires a positive count";
+            request->target_pc_visits = fields[0];
         } else if (wcscmp(option, L"--until-pc-after") == 0 && !request->pc_after_set) {
             if (!parse_fields(value, fields, 1)) {
                 return "until-pc-after requires a guest cycle";
@@ -735,6 +746,8 @@ static const char *parse_request(int argc, wchar_t **argv, struct request *reque
     if (request->pc_after_set && (!request->stop_at_pc || request->pc_after_cycle > request->cycle_limit)) {
         return "until-pc-after requires until-pc and a cycle no greater than cycles";
     }
+    if (request->target_pc_visits && !request->stop_at_pc)
+        return "until-pc-visits requires until-pc";
     if((request->series.path!=NULL)!=(request->series.count!=0) ||
        (request->series.memory.length && !request->series.path)) return "capture-series requires one or more capture points";
     if(request->mac_cpu_state && request->machine!=MACHINE_MAC128K) return "mac-cpu-state requires mac128k";
@@ -1360,10 +1373,16 @@ static void print_result(const char *status, enum machine_kind machine,
                          const struct display_summary *display,const struct keyboard_fault_result *fault,
                          const mac128k_cpu_state *cpu, const mac128k_floppy_state *floppy,
                          const mac128k_floppy_checksum_fault *floppy_fault,
-                         const mac128k_floppy_write_state *floppy_write, const mac128k_ram_steps *ram_steps)
+                         const mac128k_floppy_write_state *floppy_write, const mac128k_ram_steps *ram_steps,
+                         const struct pc_visits *visits)
 {
     printf("{\"status\":\"%s\",\"cycles\":%" PRIu64 ",\"pc\":%" PRIu32,
            status, state.cycles, state.pc);
+    if (visits && visits->target) {
+        printf(",\"pc_visits\":{\"address\":%u,\"target\":%u,\"count\":%u,"
+               "\"first_cycle\":%" PRIu64 ",\"last_cycle\":%" PRIu64 "}",
+               visits->address, visits->target, visits->count, visits->first_cycle, visits->last_cycle);
+    }
     if (machine == MACHINE_MAC128K) {
         printf(",\"machine\":\"mac128k\",\"vbl\":%" PRIu64, state.vbl);
         if (ram_steps) {
@@ -1534,7 +1553,7 @@ static void print_result(const char *status, enum machine_kind machine,
 static int request_error(const char *error)
 {
     print_result("error", MACHINE_UNSET, (struct machine_state){0}, error, NULL,
-                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                 NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     return 2;
 }
 
@@ -1687,10 +1706,33 @@ static bool enqueue_replay_samples(struct mouse_session *mouse, uint64_t through
     return true;
 }
 
+static bool reached_pc(const struct request *request, struct pc_visits *visits,
+                       const struct machine_state *state)
+{
+    if (!request->stop_at_pc || state->pc != request->target_pc || state->cycles < request->pc_after_cycle)
+        return false;
+    if (!visits->target)
+        return true;
+    /* The 286 reports the address following HLT even if it never dispatches
+       there. Keep ordinary --until-pc's stop behavior separate. */
+    if (state->halted)
+        return false;
+    /* Live input can poll the same CPU boundary several times. */
+    if (!visits->count || visits->last_cycle != state->cycles) {
+        if (!visits->count)
+            visits->first_cycle = state->cycles;
+        visits->last_cycle = state->cycles;
+        ++visits->count;
+    }
+    return visits->count == visits->target;
+}
+
 static struct run_result run_machine(struct machine *machine, const struct request *request,
                                      struct mouse_session *mouse, HANDLE cancel_event, video_capture *video,
                                      struct frame_series *series)
 {
+    machine->visits.address = request->target_pc;
+    machine->visits.target = request->target_pc_visits;
     LARGE_INTEGER frequency, start;
     if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&start)) {
         return (struct run_result){"error", "cannot start monotonic timer", 2};
@@ -1763,8 +1805,7 @@ static struct run_result run_machine(struct machine *machine, const struct reque
                 return (struct run_result){"error","cannot read series memory",2};
         }
         if ((ram_steps && ram_steps->returned == ram_steps->target) ||
-            (request->stop_at_pc && state.pc == request->target_pc &&
-             state.cycles >= request->pc_after_cycle) ||
+            reached_pc(request, &machine->visits, &state) ||
             (request->stop_at_post && state.post_written && state.post == request->target_post) ||
             matches(machine, request->until)) {
             return (struct run_result){"condition_met", NULL, 0};
@@ -2482,7 +2523,7 @@ int wmain(int argc, wchar_t **argv)
              "Images: --rom PATH --floppy PATH --hard-disk PATH --disk-out PATH --ega-rom PATH\n"
              "  --boot-drive hard-disk|floppy selects the pc286 built-in firmware boot device.\n"
              "  --floppy-out NEW_PATH enables private floppy writes and snapshots only a successful run.\n"
-             "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] --until-post BYTE --cancel-event NAME\n"
+             "Stop: --until ADDRESS:WIDTH:VALUE --until-pc ADDRESS [--until-pc-after CYCLE] [--until-pc-visits N] --until-post BYTE --cancel-event NAME\n"
              "  --until-mac-ram-steps START:LENGTH:COUNT stops after CPU steps beginning in the low RAM range.\n"
              "Output: --inspect ADDRESS:LENGTH (repeatable) --frame PATH (Mac PBM, PC PPM), JSON on stdout\n"
              "  --mac-cpu-state 1 adds stopped Mac D0-D7/A0-A7/PC/SR values (A7 is the active stack).\n"
@@ -2733,7 +2774,7 @@ int wmain(int argc, wchar_t **argv)
                  &mouse, video, &request.series,request.keyboard_witness_path?&keyboard:NULL,
                  request.display_witness_path?&display:NULL,request.keyboard_fault_set?&keyboard_fault:NULL,
                  cpu_observed?&cpu:NULL,floppy_observed?&floppy:NULL,floppy_fault_observed?&floppy_fault:NULL,
-                 floppy_write_observed?&floppy_write:NULL, mac128k_get_ram_steps(machine.mac));
+                 floppy_write_observed?&floppy_write:NULL, mac128k_get_ram_steps(machine.mac), &machine.visits);
     free(request.series.data);
     close_mouse_session(&mouse);
     destroy_machine(&machine);

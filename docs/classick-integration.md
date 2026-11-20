@@ -225,6 +225,10 @@ checks after a startup or interaction sequence without modifying guest code.
 The [cycle-qualified stop contract](pc-stop-cycle.md) describes boundaries,
 refusals and downstream post-recovery game-call evidence.
 
+Add `--until-pc-visits N` to count repeated entries to the installed
+286 dispatcher or a known Macintosh trap entry in a single cold run.
+An unreachable count still returns the observed total, including zero.
+
 For disk entry, use `--until-mac-ram-steps START:LENGTH:COUNT` to stop just
 after modeled CPU steps from the specified low-RAM range. Omit `--inspect`
 and trace options when collecting only the numeric PC and step counts.

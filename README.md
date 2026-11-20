@@ -97,6 +97,7 @@ The larger run budget applies to native `mac128k` and `pc286` only; NES retains 
 | `--until ADDRESS:WIDTH:VALUE` | Stop when 1, 2 or 4 physical memory bytes equal the value in guest byte order. |
 | `--until-pc ADDRESS` | Stop at a 24-bit physical instruction address. |
 | `--until-pc-after CYCLE` | With `--until-pc`, ignore earlier visits and stop at the first matching boundary at or after this absolute guest cycle. Mac/286 only; see [qualified PC stops](docs/pc-stop-cycle.md). |
+| `--until-pc-visits N` | Stop on the Nth qualifying visit to the selected PC on Mac or 286. The result includes the count and first and last matching cycles. [PC visit counting](docs/pc-stop-cycle.md#count-visits-to-a-known-pc). |
 | `--until-post BYTE` | PC only. Stop when the guest writes the value to I/O port `0x80`. |
 | `--inspect ADDRESS:LENGTH` | Inspect physical memory at stop, without device side effects. Repeat up to 16 times, each 1–4,096 bytes, with at most 16,384 bytes total. Overlaps and duplicates are returned in request order. One range keeps the existing `memory` object. Multiple ranges use `memory_ranges`, an array of `{address, bytes}` objects. |
 | `--frame PATH` | Write a new image at stop. Macintosh emits binary PBM and PC emits binary RGB PPM. Existing files are protected. |
